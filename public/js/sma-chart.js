@@ -36,9 +36,7 @@
   function detectEvents(prices, thresholdPct) {
     if (!prices.length) return [];
     let anchor = prices[0].c;
-    const events = [
-      { d: prices[0].d, c: anchor, dir: "start", pct: 0 },
-    ];
+    const events = [{ d: prices[0].d, c: anchor, dir: "start", pct: 0 }];
     for (let i = 1; i < prices.length; i++) {
       const c = prices[i].c;
       const pct = ((c - anchor) / anchor) * 100;
@@ -121,8 +119,44 @@
     return streaks;
   }
 
+  // ---------- Growth trend: least-squares line on log(close) vs years ----------
+  const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
+
+  function fitGrowthTrend(prices) {
+    // Thin OTC listings can report $0.00 closes; log(0) would poison the fit.
+    const pts = prices.filter((p) => p.c > 0);
+    if (pts.length < 2) return null;
+    const t0 = Date.parse(prices[0].d);
+    const yearsSince = (d) => (Date.parse(d) - t0) / MS_PER_YEAR;
+    const xs = pts.map((p) => yearsSince(p.d));
+    const ys = pts.map((p) => Math.log(p.c));
+    const mx = xs.reduce((s, x) => s + x, 0) / xs.length;
+    const my = ys.reduce((s, y) => s + y, 0) / ys.length;
+    let sxy = 0;
+    let sxx = 0;
+    for (let i = 0; i < xs.length; i++) {
+      sxy += (xs[i] - mx) * (ys[i] - my);
+      sxx += (xs[i] - mx) ** 2;
+    }
+    const slope = sxy / sxx;
+    const intercept = my - slope * mx;
+    const trend = prices.map((p) =>
+      Math.exp(intercept + slope * yearsSince(p.d)),
+    );
+    const last = prices.length - 1;
+    return {
+      ratePct: (Math.exp(slope) - 1) * 100,
+      trend,
+      trendToday: trend[last],
+      gapPct: (prices[last].c / trend[last] - 1) * 100,
+      spanYears: yearsSince(prices[last].d),
+    };
+  }
+
+  const signed = (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`;
+
   // ---------- Rendering ----------
-  function buildTraces(prices, events) {
+  function buildTraces(prices, events, trend, trendColor) {
     const traces = [
       {
         x: prices.map((p) => p.d),
@@ -134,6 +168,18 @@
         hovertemplate: "%{x|%b %d, %Y}<br>$%{y:.2f}<extra></extra>",
       },
     ];
+
+    if (trend) {
+      traces.push({
+        x: prices.map((p) => p.d),
+        y: trend.trend,
+        type: "scatter",
+        mode: "lines",
+        name: `Trend ${signed(trend.ratePct)}%/yr (${trend.spanYears.toFixed(1)}y fit)`,
+        line: { color: trendColor, width: 2, dash: "dash" },
+        hovertemplate: "%{x|%b %d, %Y}<br>trend $%{y:.2f}<extra></extra>",
+      });
+    }
 
     const dateIdx = new Map(prices.map((p, i) => [p.d, i]));
     for (let i = 1; i < events.length; i++) {
@@ -185,11 +231,14 @@
     const downs = events.filter((e) => e.dir === "down").length;
     const downStreaks = findDownStreaks(events, minDownStreak);
     const upStreaks = findUpStreaks(events, minUpStreak);
+    const trend = fitGrowthTrend(payload.prices);
 
     const statsEl = document.getElementById("sma-stats");
     const fmtDate = (d) =>
       new Date(d + "T00:00:00").toLocaleDateString(undefined, {
-        year: "numeric", month: "short", day: "numeric",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
       });
     statsEl.innerHTML = `
       <div class="sma-stat"><span class="lbl">Ticker</span><span class="val">${payload.ticker}</span></div>
@@ -199,14 +248,23 @@
       <div class="sma-stat"><span class="lbl">-${thresholdPct}% triggers</span><span class="val down">${downs}</span></div>
       <div class="sma-stat"><span class="lbl">Up-streaks (≥${minUpStreak})</span><span class="val up">${upStreaks.length}</span></div>
       <div class="sma-stat"><span class="lbl">Down-streaks (≥${minDownStreak})</span><span class="val down">${downStreaks.length}</span></div>
+      ${
+        trend
+          ? `
+      <div class="sma-stat" title="Steady yearly growth that best fits every daily close over the period (least-squares line on log price)"><span class="lbl">Trend growth</span><span class="val">${signed(trend.ratePct)}%/yr</span></div>
+      <div class="sma-stat" title="Where the dashed trend line sits on the latest date"><span class="lbl">Trend price today</span><span class="val">$${trend.trendToday.toFixed(2)}</span></div>
+      <div class="sma-stat" title="Latest close vs the trend line: negative = below trend, positive = above"><span class="lbl">vs trend</span><span class="val ${trend.gapPct < 0 ? "down" : "up"}">${signed(trend.gapPct)}%</span></div>`
+          : ""
+      }
     `;
 
-    const traces = buildTraces(payload.prices, events);
     const cs = getComputedStyle(document.documentElement);
-    const clrBg     = cs.getPropertyValue("--bg").trim()     || "#f7fafc";
-    const clrBgCard = cs.getPropertyValue("--bg-card").trim()|| "#ffffff";
-    const clrFg     = cs.getPropertyValue("--fg").trim()     || "#2d3748";
+    const clrBg = cs.getPropertyValue("--bg").trim() || "#f7fafc";
+    const clrBgCard = cs.getPropertyValue("--bg-card").trim() || "#ffffff";
+    const clrFg = cs.getPropertyValue("--fg").trim() || "#2d3748";
     const clrBorder = cs.getPropertyValue("--border").trim() || "#cbd5e0";
+    const clrAccent = cs.getPropertyValue("--accent").trim() || "#0284c7";
+    const traces = buildTraces(payload.prices, events, trend, clrAccent);
     const layout = {
       title: {
         text: `${payload.ticker} — ±${thresholdPct}% moving-anchor events`,
@@ -214,7 +272,12 @@
       },
       margin: { l: 60, r: 20, t: 60, b: 50 },
       hovermode: "closest",
-      xaxis: { title: "Date", showgrid: true, gridcolor: clrBorder, color: clrFg },
+      xaxis: {
+        title: "Date",
+        showgrid: true,
+        gridcolor: clrBorder,
+        color: clrFg,
+      },
       yaxis: {
         title: "Adjusted close (USD)",
         showgrid: true,
@@ -318,12 +381,15 @@
     }
 
     tickerSelect.innerHTML = manifest.tickers
-      .map((t) => `<option value="${t.ticker}">${t.ticker} — ${t.name}</option>`)
+      .map(
+        (t) => `<option value="${t.ticker}">${t.ticker} — ${t.name}</option>`,
+      )
       .join("");
 
     // Deep link from the leaderboard: /chart/?ticker=XXXX preselects the row.
     const requested = new URLSearchParams(window.location.search)
-      .get("ticker")?.toUpperCase();
+      .get("ticker")
+      ?.toUpperCase();
     if (requested && manifest.tickers.some((t) => t.ticker === requested)) {
       tickerSelect.value = requested;
     }
@@ -337,7 +403,10 @@
         }
         if (tickerSelect.selectedOptions[0]?.hidden) {
           const first = Array.from(tickerSelect.options).find((o) => !o.hidden);
-          if (first) { tickerSelect.value = first.value; update(); }
+          if (first) {
+            tickerSelect.value = first.value;
+            update();
+          }
         }
       });
     }
@@ -372,7 +441,9 @@
     minStreakInput.addEventListener("input", update);
     minUpStreakInput.addEventListener("input", update);
 
-    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => update());
+    window
+      .matchMedia("(prefers-color-scheme: dark)")
+      .addEventListener("change", () => update());
     window.addEventListener("themechange", () => update());
 
     await update();
