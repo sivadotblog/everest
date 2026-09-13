@@ -73,6 +73,7 @@ analyzer:
   # net_dips_per_year / recovery_rate (dip-transition reliability) remain as
   # context columns, not the rank key.
   
+    - RKLB
   # Leveraged ETFs (TQQQ, SOXL, ...) are part of the universe. The old
   # predictive pipeline excluded them (volatility decay skewed cross-ticker
   # stats); the descriptive model just reports what each ticker printed and
