@@ -64,15 +64,17 @@ def _write_json(path: Path, payload) -> None:
 
 
 def _universe(cfg: dict, tickers_arg: str | None) -> list[str]:
-    """Universe tickers. Leveraged ETF categories are excluded by default
-    (volatility decay makes their event statistics non-comparable) unless
-    analyzer.include_leveraged is set."""
+    """Universe tickers plus issue-requested ones (`requested_stocks`).
+    Leveraged ETF categories are excluded by default (volatility decay makes
+    their event statistics non-comparable) unless analyzer.include_leveraged
+    is set."""
     uni = cfg["universe"]
     include_lev = cfg["analyzer"]["include_leveraged"]
     tickers: set[str] = set()
     for cat, names in uni.items():
         if include_lev or not cat.startswith("leveraged"):
             tickers.update(names)
+    tickers.update(r["ticker"] for r in cfg.get("requested_stocks") or [])
     if tickers_arg:
         tickers = {t.strip().upper() for t in tickers_arg.split(",")}
     return sorted(tickers)

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Validate a ticker against Yahoo Finance and add it to config.yaml supplement.
+Validate a ticker against Yahoo Finance and append it to config.yaml's
+requested_stocks section.
 
-Usage: uv run python scripts/validate_ticker.py TICKER
+Usage: uv run python scripts/validate_ticker.py TICKER [ISSUE_NUMBER]
 
 Exits 0 on success, 1 on failure.
 Sets GITHUB_OUTPUT variables: added, name, reason.
@@ -10,19 +11,20 @@ Sets GITHUB_OUTPUT variables: added, name, reason.
 from __future__ import annotations
 
 import os
-import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yfinance as yf
 import yaml
 
+from validate_config import SECTION, TICKER_RE, append_requested_stock, check_text
+
 CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
-# Insertion point: the blank line before the leveraged ETF sections
-INSERT_BEFORE = "\n  # Leveraged ETFs"
 
 
 def set_output(key: str, value: str) -> None:
+    value = " ".join(value.splitlines())  # GITHUB_OUTPUT takes one key=value per line
     gho = os.environ.get("GITHUB_OUTPUT", "")
     if gho:
         with open(gho, "a") as f:
@@ -42,16 +44,22 @@ def main() -> None:
         fail("No ticker provided")
 
     ticker = sys.argv[1].strip().upper()
+    issue = int(sys.argv[2]) if len(sys.argv) > 2 else None
 
     # Basic format check — letters/digits, optional dot (BRK.B) or hyphen
-    if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,5}", ticker):
+    if not TICKER_RE.fullmatch(ticker):
         fail(f"`{ticker}` doesn't look like a valid ticker symbol")
 
-    # Check not already in config
+    # Refuse to build on a config that is already broken
     config_text = CONFIG_PATH.read_text()
+    if errors := check_text(config_text):
+        fail(f"config.yaml is invalid, fix it before adding tickers: {'; '.join(errors)}")
+
+    # Check not already in config
     config = yaml.safe_load(config_text)
     universe = config.get("universe", {})
     existing = {str(t).upper() for tickers in universe.values() for t in tickers}
+    existing |= {r["ticker"] for r in config[SECTION] or []}
     if ticker in existing:
         fail(f"`{ticker}` is already in the screening universe")
 
@@ -81,20 +89,21 @@ def main() -> None:
 
     name = info.get("longName") or info.get("shortName") or ticker
 
-    # Add to config.yaml supplement — string manipulation to preserve comments
-    if INSERT_BEFORE not in config_text:
-        fail("Could not find insertion point in config.yaml")
-
-    new_text = config_text.replace(
-        INSERT_BEFORE,
-        f"\n    - {ticker}{INSERT_BEFORE}",
-        1,
-    )
+    # Append a record to requested_stocks (the file's last section). Refuses
+    # any edit that would touch another section or leave the YAML invalid.
+    record = {"ticker": ticker, "name": name}
+    if issue is not None:
+        record["issue"] = issue
+    record["added"] = datetime.now(timezone.utc).date()
+    try:
+        new_text = append_requested_stock(config_text, record)
+    except ValueError as e:
+        fail(str(e))
     CONFIG_PATH.write_text(new_text)
 
     set_output("added", "true")
     set_output("name", name or ticker)
-    print(f"✅ Added {ticker} ({name}) to supplement")
+    print(f"✅ Added {ticker} ({name}) to {SECTION}")
 
 
 if __name__ == "__main__":

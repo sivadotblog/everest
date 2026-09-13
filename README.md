@@ -106,9 +106,16 @@ no API key. Daily closes cached under `.cache/prices/`.
 
 ### Adding tickers to the site
 
-Open a GitHub issue with the *add-ticker* template (or edit
-`config.yaml → universe.supplement`); the daily `Refresh Data and Deploy`
-workflow picks it up.
+Open a GitHub issue with the *add-ticker* template: the bot checks the symbol
+on Yahoo Finance, appends a record to `config.yaml → requested_stocks` (keep
+that section last in the file), re-validates the whole config, and only then
+pushes to `main`. Hand-picked additions go in `config.yaml →
+universe.supplement`; the daily `Refresh Data and Deploy` workflow picks up
+both.
+
+`uv run python scripts/validate_config.py` checks the file locally; the
+`Validate config` workflow runs it on every PR and push that touches
+`config.yaml`.
 
 ## License
 

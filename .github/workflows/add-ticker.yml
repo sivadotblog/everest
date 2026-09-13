@@ -15,6 +15,13 @@ jobs:
     if: contains(toJSON(github.event.issue.labels), '"add-ticker"')
     runs-on: ubuntu-latest
 
+    # The issue title is attacker-controlled on a public repo, so it and
+    # everything derived from it reach shell/JS only through env vars, never
+    # ${{ }} interpolation into a script body (which would run `$(...)`).
+    env:
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,23 +35,32 @@ jobs:
       - name: Parse ticker from issue title
         id: parse
         run: |
-          TITLE="${{ github.event.issue.title }}"
           # Extract everything after "Add ticker:" and strip whitespace
-          TICKER=$(echo "$TITLE" | sed 's/.*[Aa]dd [Tt]icker:[[:space:]]*//' | tr '[:lower:]' '[:upper:]' | tr -d ' \t\r\n')
+          TICKER=$(echo "$ISSUE_TITLE" | sed 's/.*[Aa]dd [Tt]icker:[[:space:]]*//' | tr '[:lower:]' '[:upper:]' | tr -d ' \t\r\n')
           echo "ticker=$TICKER" >> "$GITHUB_OUTPUT"
           echo "Parsed ticker: $TICKER"
 
       - name: Validate and add ticker
         id: validate
-        run: uv run python scripts/validate_ticker.py "${{ steps.parse.outputs.ticker }}"
+        env:
+          TICKER: ${{ steps.parse.outputs.ticker }}
+        run: uv run python scripts/validate_ticker.py "$TICKER" "$ISSUE_NUMBER"
+
+      # Gate: re-check the file actually written before anything reaches main.
+      # (validate_ticker.py already refuses edits outside requested_stocks.)
+      - name: Validate config.yaml
+        if: steps.validate.outputs.added == 'true'
+        run: uv run python scripts/validate_config.py
 
       - name: Commit config.yaml
         if: steps.validate.outputs.added == 'true'
+        env:
+          TICKER: ${{ steps.parse.outputs.ticker }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add config.yaml
-          git commit -m "feat(config): add ${{ steps.parse.outputs.ticker }} via issue #${{ github.event.issue.number }}"
+          git commit -m "feat(config): add $TICKER via issue #$ISSUE_NUMBER"
           git push
 
       - name: Trigger site rebuild
@@ -62,14 +78,18 @@ jobs:
       - name: Comment success
         if: steps.validate.outputs.added == 'true'
         uses: actions/github-script@v7
+        env:
+          TICKER: ${{ steps.parse.outputs.ticker }}
+          NAME: ${{ steps.validate.outputs.name }}
         with:
           script: |
+            const { TICKER, NAME } = process.env;
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: [
-                `✅ **${{ steps.parse.outputs.ticker }}** (${{ steps.validate.outputs.name }}) has been added to the screening universe!`,
+                `✅ **${TICKER}** (${NAME}) has been added to the screening universe!`,
                 ``,
                 `The leaderboard will update automatically within the next few minutes as the [data refresh workflow](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/refresh_sma_data.yml) runs.`,
               ].join('\n')
@@ -82,17 +102,25 @@ jobs:
               state_reason: 'completed',
             });
 
+      # failure() is required: an `if:` without a status function gets an
+      # implicit `success() &&`, so the old `added != 'true'` condition was
+      # skipped whenever validation failed and rejections went unanswered.
       - name: Comment failure
-        if: steps.validate.outputs.added != 'true'
+        if: failure()
         uses: actions/github-script@v7
+        env:
+          TICKER: ${{ steps.parse.outputs.ticker }}
+          REASON: ${{ steps.validate.outputs.reason }}
         with:
           script: |
+            const { TICKER, REASON } = process.env;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: [
-                `❌ Could not add **${{ steps.parse.outputs.ticker }}**: ${{ steps.validate.outputs.reason }}`,
+                `❌ Could not add **${TICKER}**: ${REASON || `the request failed a check ([workflow log](${runUrl}))`}`,
                 ``,
                 `Please check the ticker symbol and try again.`,
               ].join('\n')
