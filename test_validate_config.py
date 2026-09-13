@@ -117,3 +117,12 @@ def test_universe_includes_requested_stocks():
     from main import _universe
     cfg = yaml.safe_load(append_requested_stock(BASE, RKLB))
     assert _universe(cfg, None) == ["AAPL", "RKLB", "SSO"]
+
+
+def test_site_and_analyzer_lookback_years_match():
+    # The chart explorer fits its trend line over site.lookback_years of
+    # data while the leaderboard computes it over analyzer.lookback_years —
+    # if they diverge, the leaderboard's "Trend growth" / "vs trend" columns
+    # won't agree with what the chart shows for the same ticker.
+    cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
+    assert cfg["site"]["lookback_years"] == cfg["analyzer"]["lookback_years"]
