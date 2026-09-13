@@ -740,3 +740,7 @@ requested_stocks:
     name: Rocket Lab Corporation
     issue: 9
     added: 2026-09-13
+  - ticker: ZETA
+    name: Zeta Global Holdings Corp.
+    issue: 11
+    added: 2026-09-13
