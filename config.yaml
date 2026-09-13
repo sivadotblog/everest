@@ -729,3 +729,14 @@ universe:
     - YALL
     - ZETX
 
+# ---------------------------------------------------------------------------
+# Tickers requested via GitHub issues (add-ticker template), merged into the
+# universe at runtime. scripts/validate_ticker.py appends one record per
+# request at the END of this file — keep this section last;
+# scripts/validate_config.py rejects the config if another section follows.
+# ---------------------------------------------------------------------------
+requested_stocks:
+  - ticker: RKLB
+    name: Rocket Lab Corporation
+    issue: 9
+    added: 2026-09-13
