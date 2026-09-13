@@ -120,6 +120,7 @@
   }
 
   // ---------- Growth trend: least-squares line on log(close) vs years ----------
+  // Mirrored in reliability.fit_growth_trend — keep in sync.
   const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 
   function fitGrowthTrend(prices) {
@@ -448,6 +449,8 @@
 
     await update();
   }
+
+  window.__fitGrowthTrend = fitGrowthTrend;
 
   if (document.readyState !== "loading") {
     init();

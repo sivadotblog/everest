@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from reliability import (SIGNAL_BUY, SIGNAL_SELL, compute_oscillation_summary,
-                         find_threshold_events)
+                         find_threshold_events, fit_growth_trend)
 from report import build_leaderboard, compute_leaderboard_rows
 
 # ---------------------------------------------------------------------------
@@ -539,6 +539,11 @@ def test_leaderboard_payloads_one_per_threshold():
     osc_5 = next(r for r in payloads[5.0]["results"] if r["ticker"] == "OSC")
     osc_10 = next(r for r in payloads[10.0]["results"] if r["ticker"] == "OSC")
     assert (osc_5["n_up"] + osc_5["n_down"]) >= (osc_10["n_up"] + osc_10["n_down"])
+    # The trend fit doesn't depend on the leg threshold — same numbers
+    # regardless of which payload it's read from.
+    assert osc_5["trend_growth_pct"] == osc_10["trend_growth_pct"]
+    assert osc_5["trend_price"] == osc_10["trend_price"]
+    assert osc_5["vs_trend_pct"] == osc_10["vs_trend_pct"]
 
 
 def test_leaderboard_payloads_flags_short_history():
@@ -570,3 +575,157 @@ def test_leaderboard_payloads_flags_short_history():
     by_ticker = {r["ticker"]: r for r in payloads[10.0]["results"]}
     assert by_ticker["OSC"]["short_history"] is False
     assert by_ticker["YOUNG"]["short_history"] is True
+
+
+# ---------------------------------------------------------------------------
+# growth trend fit (mirrors the chart's dashed trend line — see
+# fit_growth_trend / fitGrowthTrend in public/js/sma-chart.js)
+# ---------------------------------------------------------------------------
+
+def _exp_prices(base, n=771, start="2020-01-02"):
+    """Exact ``100 * base**years`` over an n-row business-day range: every
+    point sits precisely on the fitted line, so the fit's residual is zero
+    and the recovered rate should equal ``base`` to float precision."""
+    dates = pd.bdate_range(start, periods=n)
+    years = (dates - dates[0]).days / 365.25
+    return make_prices(100.0 * base ** years, start=start)
+
+
+def test_growth_trend_exact_exponential_gain():
+    prices = _exp_prices(1.2)
+    t = fit_growth_trend(prices["date"], prices["close"].to_numpy())
+    assert t["trend_growth_pct"] == pytest.approx(20.0, abs=1e-9)
+    assert t["trend_price"] == pytest.approx(prices["close"].iloc[-1], abs=1e-9)
+    assert t["vs_trend_pct"] == pytest.approx(0.0, abs=1e-9)
+
+    s = compute_oscillation_summary(prices, threshold_pct=10.0)
+    assert s["trend_growth_pct"] == pytest.approx(20.0, abs=1e-6)
+    assert s["trend_price"] == pytest.approx(prices["close"].iloc[-1], abs=1e-6)
+    assert s["vs_trend_pct"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_growth_trend_exact_exponential_loss():
+    prices = _exp_prices(0.8)
+    t = fit_growth_trend(prices["date"], prices["close"].to_numpy())
+    assert t["trend_growth_pct"] == pytest.approx(-20.0, abs=1e-9)
+    assert t["vs_trend_pct"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_growth_trend_constant_price_is_flat():
+    prices = make_prices([50.0] * 250)
+    t = fit_growth_trend(prices["date"], prices["close"].to_numpy())
+    assert t["trend_growth_pct"] == pytest.approx(0.0, abs=1e-9)
+    assert t["trend_price"] == pytest.approx(50.0, abs=1e-9)
+    assert t["vs_trend_pct"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_growth_trend_matches_independent_polyfit():
+    """steady_grower_prices() has no exact closed form — check the fit
+    against an independently-computed np.polyfit on log price."""
+    prices = steady_grower_prices()
+    dates = pd.to_datetime(prices["date"])
+    close = prices["close"].to_numpy(dtype=float)
+    years = (dates - dates.iloc[0]).dt.days.to_numpy(dtype=float) / 365.25
+    slope, intercept = np.polyfit(years, np.log(close), 1)
+    expected_trend_price = float(np.exp(intercept + slope * years[-1]))
+    expected_rate_pct = (float(np.exp(slope)) - 1) * 100
+    expected_vs_trend_pct = (float(close[-1]) / expected_trend_price - 1) * 100
+
+    t = fit_growth_trend(dates, close)
+    assert t["trend_growth_pct"] == pytest.approx(expected_rate_pct, rel=1e-9)
+    assert t["trend_price"] == pytest.approx(expected_trend_price, rel=1e-9)
+    assert t["vs_trend_pct"] == pytest.approx(expected_vs_trend_pct, rel=1e-9)
+
+
+def test_growth_trend_ignores_zero_closes():
+    """A thin-listing $0.00 print (log(0) = -inf) must be excluded, not
+    poison the fit — with an otherwise-exact line, dropping one point still
+    recovers the same line exactly."""
+    prices = _exp_prices(1.2)
+    closes = prices["close"].to_numpy(dtype=float).copy()
+    closes[5] = 0.0
+    t = fit_growth_trend(prices["date"], closes)
+    assert t["trend_growth_pct"] == pytest.approx(20.0, abs=1e-9)
+    assert t["vs_trend_pct"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_growth_trend_none_cases():
+    one_row = make_prices([100.0])
+    assert fit_growth_trend(one_row["date"], one_row["close"].to_numpy()) is None
+
+    mostly_zero = make_prices([0.0, 0.0, 5.0])
+    assert fit_growth_trend(mostly_zero["date"], mostly_zero["close"].to_numpy()) is None
+
+    same_date = pd.DataFrame({
+        "date": pd.to_datetime(["2020-01-02", "2020-01-02"]),
+        "close": [100.0, 110.0],
+    })
+    assert fit_growth_trend(same_date["date"], same_date["close"].to_numpy()) is None
+
+    # compute_oscillation_summary's early-return path (fewer than 2 rows)
+    # must carry the three keys as None, not omit them.
+    s = compute_oscillation_summary(make_prices([100.0]), threshold_pct=10.0)
+    assert s["trend_growth_pct"] is None
+    assert s["trend_price"] is None
+    assert s["vs_trend_pct"] is None
+
+
+def test_growth_trend_matches_chart_js():
+    """Run the real sma-chart.js fitGrowthTrend in node and compare against
+    the Python port at rel 1e-9 — the two must agree, since the leaderboard
+    (Python) and the chart explorer (JS) show the same numbers for the same
+    ticker."""
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+
+    root = Path(__file__).parent
+    py_results = []
+    js_vectors = []
+
+    def add(prices):
+        dates = pd.to_datetime(prices["date"])
+        close = prices["close"].to_numpy(dtype=float)
+        t = fit_growth_trend(dates, close)
+        py_results.append(
+            None if t is None
+            else (t["trend_growth_pct"], t["trend_price"], t["vs_trend_pct"]))
+        js_vectors.append([
+            {"d": d.strftime("%Y-%m-%d"), "c": float(c)}
+            for d, c in zip(dates, close)
+        ])
+
+    zeroed = _exp_prices(1.2)
+    zeroed_close = zeroed["close"].to_numpy(dtype=float).copy()
+    zeroed_close[5] = 0.0
+    zeroed = zeroed.assign(close=zeroed_close)
+
+    for prices in (_exp_prices(1.2), steady_grower_prices(), zeroed, sine_prices()):
+        add(prices)
+
+    harness = (
+        'const fs=require("fs"),vm=require("vm");\n'
+        'const ctx={window:{},document:{readyState:"loading",addEventListener(){}}};\n'
+        'vm.createContext(ctx); vm.runInContext(fs.readFileSync('
+        '"public/js/sma-chart.js","utf8"),ctx);\n'
+        'process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(0,"utf8")).map(p=>{\n'
+        '  const r=ctx.window.__fitGrowthTrend(p); return r&&[r.ratePct,r.trendToday,r.gapPct];})));\n'
+    )
+    result = subprocess.run(
+        ["node", "-e", harness], input=json.dumps(js_vectors),
+        capture_output=True, text=True, cwd=root, timeout=30)
+    assert result.returncode == 0, result.stderr
+    js_results = json.loads(result.stdout)
+
+    assert len(js_results) == len(py_results)
+    for py, js in zip(py_results, js_results):
+        if py is None:
+            assert js is None
+            continue
+        assert js is not None
+        for a, b in zip(py, js):
+            assert a == pytest.approx(b, rel=1e-9)

@@ -12,12 +12,13 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     The goal is simple compounding: repeated <strong>round trips at your chosen
     threshold</strong> (adjustable below) on stocks that oscillate reliably while
     net-trending up. The ranking key is
-    <strong>net legs/yr</strong> — (up legs − down legs) per year of data — because a good
-    oscillator needs both a favorable up/down ratio (quality) and a high leg count
-    (frequency); neither alone is enough. Every row also shows its <strong>current
-    price</strong> and <strong>action price</strong> (the next level that would print a
-    threshold event) so you can judge the gap yourself, rather than a computed
-    "signal" telling you what to do. Five gates keep the ranking honest without a
+    <strong>net legs/yr</strong> (the # column) — (up legs − down legs) per year of data —
+    because a good oscillator needs both a favorable up/down ratio (quality) and a
+    high leg count (frequency); neither alone is enough. Every row also shows its
+    <strong>current price</strong> against its own best-fit <strong>trend
+    price</strong> (the same least-squares growth line the chart explorer draws) so
+    you can judge whether it's running above or below its own trend, rather than a
+    computed "signal" telling you what to do. Five gates keep the ranking honest without a
     weighted score: downtrenders (📉, negative drift) rank last; parabolic runners
     (🚀, spiked 3x+ from a trailing 12-month low within the last 2 years — one-way regime
     shift, not a repeatable cycle) rank below steady names; dip-chainers (⛓️, a run of
@@ -64,8 +65,8 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       <input type="number" id="f-rank-max" placeholder="e.g. 100" min="1" />
     </div>
     <div class="tb-filter-group">
-      <label for="f-osc-min">Net legs/yr ≥</label>
-      <input type="number" id="f-osc-min" placeholder="e.g. 2" step="0.5" min="0" />
+      <label for="f-vstrend-max">vs trend ≤ %</label>
+      <input type="number" id="f-vstrend-max" placeholder="e.g. 0" step="0.5" />
     </div>
     <div class="tb-filter-group">
       <label>CAGR%</label>
@@ -88,6 +89,13 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       <thead><tr><th>Field</th><th>What it means</th></tr></thead>
       <tbody>
         <tr>
+          <td><strong>#</strong></td>
+          <td>The ranking key: (up legs − down legs) per year of data. Rewards both a
+          favorable up/down ratio and a high leg count — a ticker that rarely dips but
+          barely moves (e.g. a slow, "safe" oscillator) scores low here just as a ticker
+          that chops constantly near 1:1 does; the surplus is what compounds.</td>
+        </tr>
+        <tr>
           <td><strong>Name</strong></td>
           <td>Company / fund name, fetched from Yahoo Finance and cached alongside prices.
           Falls back to the ticker symbol if Yahoo has nothing for it. Search by name or
@@ -98,40 +106,24 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
           <td>Current price — the last available close.</td>
         </tr>
         <tr>
-          <td><strong>Action</strong></td>
-          <td>The next price level that would print a threshold event at your selected
-          ±N% threshold, based on the last completed leg's price (not today's price).
-          Example at N=10: after a down leg at 100 the next event is
-          <code>SELL ≥ 110</code>; after an up leg at 110 the next event is
-          <code>BUY ≤ 99</code>. This is a level to compare against <strong>Price</strong>,
-          deliberately not a recommendation — a stock can be a perfectly good buy before it
-          reaches its Action price; whether and when to act is your decision.</td>
+          <td><strong>Trend growth</strong></td>
+          <td>Best-fit steady yearly growth over the lookback (least-squares line on log
+          price — the chart's dashed line); unlike CAGR% it isn't hostage to the first
+          and last day.</td>
         </tr>
         <tr>
-          <td><strong>% Needed</strong></td>
-          <td>How far <strong>Price</strong> has to move to reach <strong>Action</strong>,
-          signed: negative on a BUY row (price needs to fall), positive on a SELL row
-          (price needs to rise). Click the column header to sort — the names closest to
-          0% are closest to their next threshold event.</td>
+          <td><strong>Trend price today</strong></td>
+          <td>Where that line sits on the latest date — compare with <strong>Price</strong>.</td>
         </tr>
         <tr>
-          <td><strong>Net legs/yr</strong></td>
-          <td>The ranking key: (up legs − down legs) per year of data. Rewards both a
-          favorable up/down ratio and a high leg count — a ticker that rarely dips but
-          barely moves (e.g. a slow, "safe" oscillator) scores low here just as a ticker
-          that chops constantly near 1:1 does; the surplus is what compounds.</td>
-        </tr>
-        <tr>
-          <td><strong>Net dips/yr / P(rec)</strong></td>
-          <td>Context on dip reliability: down→up transitions minus down→down transitions
-          per year, and P(recovery | dip) — the fraction of dips that resolved immediately
-          rather than deepening into another down leg. A ticker can rank well on net legs/yr
-          while still chaining dips often (worth checking before sizing a position).</td>
+          <td><strong>vs trend</strong></td>
+          <td>Negative (orange) = below trend; sort ascending for names furthest below
+          their own trend.</td>
         </tr>
         <tr>
           <td><strong>n▲ / n▼</strong></td>
           <td>Raw counts of +N% and −N% legs (at the selected threshold) over the window —
-          the evidence behind every rate above, never hidden. A young listing can show a
+          the evidence behind the rank, never hidden. A young listing can show a
           strong rate on few legs;
           check n▲ (also see 🌱 thin-history and 🐣 short-history flags).</td>
         </tr>
@@ -170,7 +162,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         </tr>
         <tr>
           <td><strong>🌱 Thin history</strong></td>
-          <td>Fewer than 10 completed legs — not enough evidence for the rates above to
+          <td>Fewer than 10 completed legs — not enough evidence for the rank to
           mean anything (a new leveraged ETF can print a flattering rate on a handful of
           legs). Flagged and ranked just below the proven steady names.</td>
         </tr>

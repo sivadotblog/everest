@@ -29,7 +29,11 @@ up offers many +N% harvests per year. What matters is:
     nearly as many down legs as up),
   * that the drift over the window is positive (``trend_positive`` — a
     down-trender is excluded no matter how nicely it swings),
-  * context: CAGR (growth) and max drawdown (volatility).
+  * context: CAGR (growth), max drawdown (volatility), and the best-fit
+    steady growth trend (``trend_growth_pct`` / ``trend_price`` /
+    ``vs_trend_pct`` — the same least-squares line the chart explorer draws
+    as its dashed trend line, kept in sync with ``fitGrowthTrend`` in
+    public/js/sma-chart.js).
 
 Consecutive down legs are never treated as failures — a stock that fell -10%
 three times and then recovered is oscillation richness, not three failed
@@ -169,6 +173,41 @@ def _cagr_and_max_drawdown(close: np.ndarray, span_days: int) -> tuple[float, fl
     return cagr, max_drawdown
 
 
+def fit_growth_trend(dates: pd.Series, close: np.ndarray) -> dict | None:
+    """Best-fit steady growth rate: a least-squares line on ln(close) against
+    years since the first date, using centered sums (not ``np.polyfit``).
+
+    Mirrors ``fitGrowthTrend`` in public/js/sma-chart.js exactly — the two
+    implementations must be kept in sync; ``test_growth_trend_matches_chart_js``
+    in test_analyzer.py checks that they agree.
+
+    Returns ``trend_growth_pct`` (the fit's implied annualized growth rate),
+    ``trend_price`` (the fitted line's value on the last date), and
+    ``vs_trend_pct`` (the last close vs. that value — negative means the
+    ticker sits below its own trend). ``None`` when fewer than two closes are
+    positive (log(0) would poison the fit) or every positive close falls on
+    the same date (zero variance in years, so no line can be fit).
+    """
+    years = (dates - dates.iloc[0]).dt.days.to_numpy(dtype=float) / _DAYS_PER_YEAR
+    pos = close > 0
+    if pos.sum() < 2:
+        return None
+    x, y = years[pos], np.log(close[pos])
+    dx = x - x.mean()
+    sxx = float((dx * dx).sum())
+    if sxx <= 0:
+        return None
+    slope = float((dx * (y - y.mean())).sum()) / sxx
+    intercept = float(y.mean()) - slope * float(x.mean())
+    trend = float(np.exp(intercept + slope * years[-1]))
+    res = {
+        "trend_growth_pct": (float(np.exp(slope)) - 1) * 100,
+        "trend_price": trend,
+        "vs_trend_pct": (float(close[-1]) / trend - 1) * 100,
+    }
+    return res if all(np.isfinite(v) for v in res.values()) else None
+
+
 def _run_up_series(prices: pd.DataFrame, window_days: int) -> pd.Series:
     """Per-day % gain over the lowest close in the trailing ``window_days``
     window: close[t] / min(close[t-window .. t]) - 1, as a percentage. Daily
@@ -224,8 +263,14 @@ def compute_oscillation_summary(prices: pd.DataFrame,
     when the recent value — within ``parabolic_recency_days`` of ``as_of`` —
     reaches ``parabolic_max_run_up_pct``), ``max_down_streak`` / ``chained_dips``
     (dip-chain gate: longest run of consecutive down legs; flagged when it
-    reaches ``chained_max_down_streak``), CAGR / max-drawdown context, the
-    current streak, ``current_price`` (last close), ``action_side`` /
+    reaches ``chained_max_down_streak``), CAGR / max-drawdown context,
+    ``trend_growth_pct`` / ``trend_price`` / ``vs_trend_pct`` (best-fit
+    steady growth trend — a least-squares line on log price, the same fit
+    the chart explorer draws as its dashed trend line; ``vs_trend_pct`` is
+    the latest close vs. that line, negative = below trend; all three are
+    ``None`` when fewer than two closes are positive or every positive
+    close shares one date), the current streak, ``current_price`` (last
+    close), ``action_side`` /
     ``action_price`` (the next price level that would print a threshold
     event — a BUY at 100 sets the next trigger at SELL >= 110; deliberately
     not called a "signal": it is a level to compare against the current
@@ -251,6 +296,9 @@ def compute_oscillation_summary(prices: pd.DataFrame,
         "net_return_pct": 0.0,
         "cagr_pct": 0.0,
         "max_drawdown_pct": 0.0,
+        "trend_growth_pct": None,
+        "trend_price": None,
+        "vs_trend_pct": None,
         "max_run_up_pct": 0.0,
         "recent_run_up_pct": 0.0,
         "parabolic": False,
@@ -304,6 +352,14 @@ def compute_oscillation_summary(prices: pd.DataFrame,
     out["cagr_pct"] = round(cagr * 100, 2)
     out["max_drawdown_pct"] = round(max_dd * 100, 2)
     out["trend_positive"] = bool(net_return > 0)
+
+    trend = fit_growth_trend(prices["date"], close)
+    if trend is not None:
+        # Rounded to 6dp, not the site's 1-2dp display: the chart computes
+        # this same fit client-side and displays the unrounded value, so
+        # storing at 2dp here would double-round roughly 5% of rows across a
+        # display boundary (e.g. 4.995 -> "5.0" here but "4.9" on the chart).
+        out.update({k: round(v, 6) for k, v in trend.items()})
 
     run_up = _run_up_series(prices, parabolic_window_days)
     if len(run_up):

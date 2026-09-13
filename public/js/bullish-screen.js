@@ -2,11 +2,11 @@
  *
  * Ranking: net_legs_per_year ((n_up - n_down) / years — surplus of harvests
  * over dips) among trend-positive tickers. Downtrenders are kept but greyed
- * and ranked last. Each row shows current_price (last close) and
- * action_side/action_price (the next price level that would print a
- * threshold event) — deliberately not a "signal": it's a level to compare
- * against the current price, not a recommendation. Stateless — there is no
- * trade tracking.
+ * and ranked last. Each row shows current_price (last close) alongside its
+ * best-fit growth trend (trend_growth_pct / trend_price / vs_trend_pct — the
+ * same least-squares line the chart explorer draws as its dashed trend
+ * line) so you can judge a ticker's drift yourself, rather than a computed
+ * "signal" telling you what to do. Stateless — there is no trade tracking.
  */
 (function () {
   "use strict";
@@ -25,6 +25,8 @@
     return (n === null || n === undefined || isNaN(n)) ? "—" : Number(n).toFixed(d);
   }
 
+  const signed = (v) => `${v > 0 ? "+" : ""}${fmt(v, 1)}`;
+
   // ---- Scatter chart ----
   function renderScatter(el, results) {
     // Candidates only: downtrenders can print many up-legs while bleeding out,
@@ -38,14 +40,17 @@
     const others = candidates.filter((r) => r.ticker !== HIGHLIGHT);
     const zeta = candidates.find((r) => r.ticker === HIGHLIGHT);
 
-    const hover = (r) =>
-      `<b>${r.ticker}</b>${r.name && r.name !== r.ticker ? ` — ${r.name}` : ""} &nbsp;#${r.rank}<br>` +
-      `net legs/yr: <b>${fmt(r.net_legs_per_year, 1)}</b> (${r.n_up}▲ / ${r.n_down}▼)<br>` +
-      `net dips/yr: ${fmt(r.net_dips_per_year, 1)} — P(rec) ${r.recovery_rate == null ? "—" : fmt(r.recovery_rate, 2)}<br>` +
-      `CAGR: ${fmt(r.cagr_pct, 1)}%/yr<br>` +
-      `MaxDD: ${fmt(r.max_drawdown_pct, 1)}%<br>` +
-      `price: ${fmt(r.current_price, 2)}` +
-      (r.action_side ? ` — next: ${r.action_side} ${r.action_side === "SELL" ? "≥" : "≤"} ${fmt(r.action_price, 2)} (${fmt(r.pct_to_action, 1)}% away)` : "");
+    const hover = (r) => {
+      const trendBits = [];
+      if (r.trend_growth_pct != null) trendBits.push(`trend ${signed(r.trend_growth_pct)}%/yr`);
+      if (r.vs_trend_pct != null) trendBits.push(`vs trend ${signed(r.vs_trend_pct)}%`);
+      return `<b>${r.ticker}</b>${r.name && r.name !== r.ticker ? ` — ${r.name}` : ""} &nbsp;#${r.rank}<br>` +
+        `net legs/yr: <b>${fmt(r.net_legs_per_year, 1)}</b> (${r.n_up}▲ / ${r.n_down}▼)<br>` +
+        (trendBits.length ? `${trendBits.join(" · ")}<br>` : "") +
+        `CAGR: ${fmt(r.cagr_pct, 1)}%/yr<br>` +
+        `MaxDD: ${fmt(r.max_drawdown_pct, 1)}%<br>` +
+        `price: ${fmt(r.current_price, 2)}`;
+    };
 
     const traces = [{
       type: "scattergl", mode: "markers",
@@ -94,7 +99,7 @@
   // ---- Tabulator table ----
   let tabulatorInstance = null;
 
-  function buildTable(el, results) {
+  function buildTable(el, results, opts = {}) {
     if (tabulatorInstance) { tabulatorInstance.destroy(); tabulatorInstance = null; }
 
     const recentEventsFmt = (cell) => {
@@ -107,16 +112,6 @@
         const bg = up ? "var(--up-bg,#e0f2fe)" : "var(--down-bg,#fff7ed)";
         return `<span title="${ev.date}" style="font-size:0.75em;font-weight:700;padding:2px 6px;border-radius:20px;background:${bg};color:${color};">${sign}</span>`;
       }).join(" ");
-    };
-
-    // The next price level that would print a threshold event — not a
-    // recommendation, just a level to compare against current_price.
-    const actionFmt = (cell) => {
-      const r = cell.getRow().getData();
-      if (!r.action_side) return `<span style="opacity:0.35;">—</span>`;
-      const sell = r.action_side === "SELL";
-      const color = sell ? "var(--down,#c2410c)" : "var(--up,#0369a1)";
-      return `<span title="the next price level that would print a threshold event, based on the last completed leg on ${r.last_event_date || "—"}. Not a recommendation." style="font-weight:600;color:${color};cursor:help;">${r.action_side} ${sell ? "≥" : "≤"} ${fmt(r.action_price, 2)}</span>`;
     };
 
     const tickerFmt = (cell) => {
@@ -135,7 +130,7 @@
         warn = ` <span title="short history (only ${fmt(r.span_years, 1)}y of price data) — the rate is computed over a span this ticker never lived through; ranked below proven oscillators" style="cursor:help;">🐣</span>`;
       }
       const chartUrl = `${siteBase()}/chart/?ticker=${encodeURIComponent(t)}`;
-      return `<a href="${chartUrl}" target="_blank" rel="noopener" style="font-weight:700;color:var(--accent,#0284c7);">${t}</a>${warn}`;
+      return `<a href="${chartUrl}" style="font-weight:700;color:var(--accent,#0284c7);">${t}</a>${warn}`;
     };
 
     const num = (d) => (cell) => fmt(cell.getValue(), d);
@@ -144,10 +139,10 @@
       data: results,
       layout: "fitDataFill",
       pagination: true,
-      paginationSize: 50,
+      paginationSize: opts.pageSize || 50,
       paginationSizeSelector: [25, 50, 100, 250],
       movableColumns: true,
-      initialSort: [{ column: "rank", dir: "asc" }],
+      initialSort: opts.sort || [{ column: "rank", dir: "asc" }],
       columns: [
         { title: "#", field: "rank", sorter: "number", hozAlign: "right", width: 55 },
         { title: "Ticker", field: "ticker", sorter: "string", width: 105, formatter: tickerFmt },
@@ -159,23 +154,27 @@
             return `<span title="${v}" style="color:var(--fg-muted,#4a5568);">${short}</span>`;
           } },
         { title: "Price", field: "current_price", sorter: "number", hozAlign: "right", width: 90, formatter: num(2) },
-        { title: "Action", field: "action_price", sorter: "number", hozAlign: "left", width: 130, formatter: actionFmt },
-        { title: "% Needed", field: "pct_to_action", sorter: "number", hozAlign: "right", width: 100,
+        { title: "Trend growth", field: "trend_growth_pct", sorter: "number",
+          sorterParams: { alignEmptyValues: "bottom" }, hozAlign: "right", width: 140,
           formatter: (cell) => {
-            const r = cell.getRow().getData();
             const v = cell.getValue();
             if (v == null) return `<span style="opacity:0.35;">—</span>`;
-            const color = r.action_side === "SELL" ? "var(--down,#c2410c)" : "var(--up,#0369a1)";
-            return `<span title="price must move this much to reach the Action level" style="color:${color};font-weight:600;cursor:help;">${v > 0 ? "+" : ""}${fmt(v, 1)}%</span>`;
+            return `<span title="Steady yearly growth that best fits every daily close over the period (least-squares line on log price)" style="cursor:help;">${signed(v)}%/yr</span>`;
           } },
-        { title: "Net legs/yr", field: "net_legs_per_year", sorter: "number", hozAlign: "right", width: 110,
-          formatter: (cell) => `<b>${fmt(cell.getValue(), 1)}</b>` },
-        { title: "Net dips/yr", field: "net_dips_per_year", sorter: "number", hozAlign: "right", width: 105,
-          formatter: num(1) },
-        { title: "P(rec)", field: "recovery_rate", sorter: "number", hozAlign: "right", width: 80,
+        { title: "Trend price today", field: "trend_price", sorter: "number",
+          sorterParams: { alignEmptyValues: "bottom" }, hozAlign: "right", width: 170,
           formatter: (cell) => {
             const v = cell.getValue();
-            return v == null ? `<span style="opacity:0.35;">—</span>` : fmt(v, 2);
+            if (v == null) return `<span style="opacity:0.35;">—</span>`;
+            return `<span title="Where the dashed trend line sits on the latest date" style="cursor:help;">${fmt(v, 2)}</span>`;
+          } },
+        { title: "vs trend", field: "vs_trend_pct", sorter: "number",
+          sorterParams: { alignEmptyValues: "bottom" }, hozAlign: "right", width: 100,
+          formatter: (cell) => {
+            const v = cell.getValue();
+            if (v == null) return `<span style="opacity:0.35;">—</span>`;
+            const color = v < 0 ? "var(--down,#c2410c)" : "var(--up,#0369a1)";
+            return `<span title="Latest close vs the trend line: negative = below trend, positive = above" style="color:${color};font-weight:700;cursor:help;">${signed(v)}%</span>`;
           } },
         { title: "n▲", field: "n_up", sorter: "number", hozAlign: "right", width: 60 },
         { title: "n▼", field: "n_down", sorter: "number", hozAlign: "right", width: 60 },
@@ -205,40 +204,131 @@
         }
       },
     });
+
+    // Threshold changes destroy and rebuild the table from scratch, which
+    // would otherwise silently drop the sort and the filters (the inputs
+    // keep their values, but the new table starts unfiltered); re-apply both
+    // once the new table exists, then jump to the saved page — setting
+    // filters re-paginates, so the page has to be set after it.
+    tabulatorInstance.on("tableBuilt", () => {
+      applyFilters();
+      const paged = opts.page > 1 ? tabulatorInstance.setPage(opts.page) : null;
+      if (restoring) {
+        // Scroll once the saved page has rendered. Not requestAnimationFrame:
+        // it never fires in a hidden tab, which left the scroll unrestored
+        // (and saving disabled) until the tab was shown. scrollTo forces a
+        // synchronous layout, so no extra frame is needed. The catch covers a
+        // saved page that no longer exists (setPage rejects) — still finish.
+        Promise.resolve(paged).catch(() => {}).then(() => {
+          // "instant": the site CSS sets scroll-behavior: smooth, which would
+          // animate up from the top (and never run at all in a hidden tab),
+          // so the saveState() below would record the starting position.
+          window.scrollTo({ top: restoreScrollY, left: 0, behavior: "instant" });
+          restoring = false;
+          saveState();
+        });
+      }
+    });
+    ["dataSorted", "pageLoaded", "pageSizeChanged"].forEach((evt) =>
+      tabulatorInstance.on(evt, saveState));
+  }
+
+  // Hoisted out of wireFilters so buildTable's tableBuilt handler can
+  // re-apply the current filter inputs to a freshly (re)built table.
+  function applyFilters() {
+    if (!tabulatorInstance) return;
+    const filters = [];
+    const q = document.getElementById("f-ticker")?.value.trim().toLowerCase();
+    if (q) {
+      // Tabulator's array-form setFilter only recognizes custom predicates
+      // wrapped as {field: fn} — a bare function is silently dropped (it
+      // looks for a filter.type in its registry and finds none).
+      filters.push({
+        field: (data) =>
+          (data.ticker || "").toLowerCase().includes(q) ||
+          (data.name || "").toLowerCase().includes(q),
+      });
+    }
+    const rankMax = document.getElementById("f-rank-max")?.value;
+    if (rankMax) filters.push({ field: "rank", type: "<=", value: Number(rankMax) });
+    const vstrendMax = document.getElementById("f-vstrend-max")?.value;
+    if (vstrendMax) filters.push({ field: (d) => d.vs_trend_pct != null && d.vs_trend_pct <= Number(vstrendMax) });
+    const cagrMin = document.getElementById("f-cagr-min")?.value;
+    if (cagrMin) filters.push({ field: "cagr_pct", type: ">=", value: Number(cagrMin) });
+    const cagrMax = document.getElementById("f-cagr-max")?.value;
+    if (cagrMax) filters.push({ field: "cagr_pct", type: "<=", value: Number(cagrMax) });
+    tabulatorInstance.setFilter(filters);
   }
 
   function wireFilters() {
     if (!tabulatorInstance) return;
 
-    function applyFilters() {
-      const filters = [];
-      const q = document.getElementById("f-ticker")?.value.trim().toLowerCase();
-      if (q) {
-        // Tabulator's array-form setFilter only recognizes custom predicates
-        // wrapped as {field: fn} — a bare function is silently dropped (it
-        // looks for a filter.type in its registry and finds none).
-        filters.push({
-          field: (data) =>
-            (data.ticker || "").toLowerCase().includes(q) ||
-            (data.name || "").toLowerCase().includes(q),
-        });
-      }
-      const rankMax = document.getElementById("f-rank-max")?.value;
-      if (rankMax) filters.push({ field: "rank", type: "<=", value: Number(rankMax) });
-      const oscMin = document.getElementById("f-osc-min")?.value;
-      if (oscMin) filters.push({ field: "net_legs_per_year", type: ">=", value: Number(oscMin) });
-      const cagrMin = document.getElementById("f-cagr-min")?.value;
-      if (cagrMin) filters.push({ field: "cagr_pct", type: ">=", value: Number(cagrMin) });
-      const cagrMax = document.getElementById("f-cagr-max")?.value;
-      if (cagrMax) filters.push({ field: "cagr_pct", type: "<=", value: Number(cagrMax) });
-      tabulatorInstance.setFilter(filters);
-    }
-
-    document.querySelectorAll("#tb-filters input").forEach(inp => inp.addEventListener("input", applyFilters));
+    document.querySelectorAll("#tb-filters input").forEach(inp => inp.addEventListener("input", () => {
+      applyFilters();
+      saveState();
+    }));
     document.getElementById("f-reset")?.addEventListener("click", () => {
       document.querySelectorAll("#tb-filters input").forEach(inp => inp.value = "");
       tabulatorInstance?.clearFilter();
+      saveState();
     });
+  }
+
+  // ---- History-state save/restore ----
+  // Persisted in history.state (not localStorage/sessionStorage) so a fresh
+  // visit — e.g. the nav bar's Leaderboard link from the chart page — starts
+  // clean, and only Back/Forward/Reload restore where the user left off.
+  let restoring = false; // true while init() is replaying a saved state
+  let restoreScrollY = 0;
+  const KNOWN_FILTER_IDS = ["f-ticker", "f-rank-max", "f-vstrend-max", "f-cagr-min", "f-cagr-max"];
+
+  function readState() {
+    const filters = {};
+    document.querySelectorAll("#tb-filters input").forEach((inp) => {
+      if (inp.id) filters[inp.id] = inp.value;
+    });
+    const thresholdInput = document.getElementById("lb-threshold");
+    return {
+      v: 1,
+      threshold: thresholdInput ? parseFloat(thresholdInput.value) : defaultThreshold,
+      filters,
+      sort: tabulatorInstance ? tabulatorInstance.getSorters().map((s) => ({ column: s.field, dir: s.dir })) : [],
+      page: tabulatorInstance ? tabulatorInstance.getPage() : 1,
+      pageSize: tabulatorInstance ? tabulatorInstance.getPageSize() : 50,
+      scrollY: window.scrollY,
+    };
+  }
+
+  function saveState() {
+    // No-op while restoring: the initial build fires its own sort/page/etc.
+    // events, which would otherwise overwrite the saved state (scroll
+    // position included) with the not-yet-restored, in-progress values.
+    if (restoring) return;
+    history.replaceState({ ...(history.state || {}), lb: readState() }, "");
+  }
+
+  function validateState(raw, thresholdInput) {
+    if (!raw || raw.v !== 1) return null;
+    const state = { filters: {}, sort: [], page: 1, pageSize: 50, scrollY: 0, threshold: null };
+    if (Number.isFinite(raw.threshold) && thresholdInput) {
+      const min = parseFloat(thresholdInput.min);
+      const max = parseFloat(thresholdInput.max);
+      if (raw.threshold >= min && raw.threshold <= max) state.threshold = raw.threshold;
+    }
+    if (raw.filters && typeof raw.filters === "object") {
+      KNOWN_FILTER_IDS.forEach((id) => {
+        if (typeof raw.filters[id] === "string") state.filters[id] = raw.filters[id];
+      });
+    }
+    if (Array.isArray(raw.sort)) {
+      state.sort = raw.sort
+        .filter((s) => s && typeof s.column === "string" && (s.dir === "asc" || s.dir === "desc"))
+        .map((s) => ({ column: s.column, dir: s.dir }));
+    }
+    if (Number.isFinite(raw.page) && raw.page >= 1) state.page = Math.floor(raw.page);
+    if (Number.isFinite(raw.pageSize) && raw.pageSize > 0) state.pageSize = Math.floor(raw.pageSize);
+    if (Number.isFinite(raw.scrollY) && raw.scrollY >= 0) state.scrollY = raw.scrollY;
+    return state;
   }
 
   // ---- Bootstrap ----
@@ -281,7 +371,7 @@
       `<small>Generated ${new Date(data.generated_at).toLocaleString()}.</small>`;
   }
 
-  async function loadAndRender(thresholdPct, isFallback) {
+  async function loadAndRender(thresholdPct, isFallback, opts) {
     const scatterEl = document.getElementById("bullish-scatter");
     const tableEl = document.getElementById("bullish-table");
     const metaEl = document.getElementById("bullish-meta");
@@ -292,24 +382,31 @@
       lastResults = data.results || [];
       if (metaEl) renderMeta(metaEl, data);
       renderScatter(scatterEl, lastResults);
-      buildTable(tableEl, lastResults);
+      buildTable(tableEl, lastResults, opts);
     } catch (err) {
       if (!isFallback && thresholdPct !== defaultThreshold) {
         const thresholdInput = document.getElementById("lb-threshold");
         const thresholdLabel = document.getElementById("lb-threshold-label");
         if (thresholdInput) thresholdInput.value = defaultThreshold;
         if (thresholdLabel) thresholdLabel.textContent = `${defaultThreshold}%`;
-        return loadAndRender(defaultThreshold, true);
+        return loadAndRender(defaultThreshold, true, opts);
       }
       if (metaEl) metaEl.innerHTML =
         `<span style="color:var(--down,#c2410c);">Could not load bullish_screen_${thresholdPct}pct.json (${err.message || err}). ` +
         "Run <code>python3 main.py leaderboard</code> to generate it.</span>";
+      // No table gets built on total failure, so tableBuilt never fires to
+      // clear this — clear it here instead.
+      restoring = false;
     }
   }
 
   async function init() {
     const scatterEl = document.getElementById("bullish-scatter");
     if (!scatterEl) return;
+
+    // We restore scroll ourselves once the (async-built) table exists; left
+    // on "auto" the browser would jump immediately, before it's there.
+    history.scrollRestoration = "manual";
 
     const thresholdInput = document.getElementById("lb-threshold");
     const thresholdLabel = document.getElementById("lb-threshold-label");
@@ -325,22 +422,62 @@
       } catch (e) {
         // Manifest missing: fall back to the slider's markup defaults (5-20, default 10).
       }
-      thresholdInput.value = defaultThreshold;
-      if (thresholdLabel) thresholdLabel.textContent = `${defaultThreshold}%`;
+    }
+
+    // Validated against the slider's min/max, which the manifest may have
+    // just changed above.
+    const savedState = validateState(history.state?.lb, thresholdInput);
+
+    if (thresholdInput) {
+      const initialThreshold = savedState?.threshold ?? defaultThreshold;
+      thresholdInput.value = initialThreshold;
+      if (thresholdLabel) thresholdLabel.textContent = `${initialThreshold}%`;
 
       thresholdInput.addEventListener("input", () => {
         const n = parseFloat(thresholdInput.value);
         if (thresholdLabel) thresholdLabel.textContent = `${n}%`;
-        loadAndRender(n, false);
+        // Rows are changing (page resets to 1), but carry sort/page size over
+        // from the table that's about to be destroyed.
+        const oldOpts = tabulatorInstance ? {
+          sort: tabulatorInstance.getSorters().map((s) => ({ column: s.field, dir: s.dir })),
+          pageSize: tabulatorInstance.getPageSize(),
+        } : undefined;
+        loadAndRender(n, false, oldOpts);
+        saveState();
       });
     }
 
-    await loadAndRender(defaultThreshold, false);
+    if (savedState) {
+      restoring = true;
+      restoreScrollY = savedState.scrollY;
+      Object.keys(savedState.filters).forEach((id) => {
+        const inp = document.getElementById(id);
+        if (inp) inp.value = savedState.filters[id];
+      });
+      await loadAndRender(savedState.threshold ?? defaultThreshold, false, {
+        sort: savedState.sort.length ? savedState.sort : undefined,
+        pageSize: savedState.pageSize,
+        page: savedState.page,
+      });
+    } else {
+      await loadAndRender(defaultThreshold, false);
+    }
+
     wireFilters();
 
     const rerenderScatter = () => renderScatter(scatterEl, lastResults);
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rerenderScatter);
     window.addEventListener("themechange", rerenderScatter);
+
+    // Capture-phase so the scroll position is recorded synchronously, right
+    // before a ticker's plain <a href> navigates the page away.
+    document.getElementById("bullish-table")?.addEventListener("click", saveState, true);
+
+    let scrollSaveTimer = null;
+    window.addEventListener("scroll", () => {
+      clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = setTimeout(saveState, 150);
+    }, { passive: true });
   }
 
   if (document.readyState === "loading")
