@@ -744,3 +744,7 @@ requested_stocks:
     name: Zeta Global Holdings Corp.
     issue: 11
     added: 2026-09-13
+  - ticker: VST
+    name: Vistra Corp.
+    issue: 13
+    added: 2026-09-15
