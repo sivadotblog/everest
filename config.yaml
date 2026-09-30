@@ -748,3 +748,7 @@ requested_stocks:
     name: Vistra Corp.
     issue: 13
     added: 2026-09-15
+  - ticker: MDB
+    name: MongoDB, Inc.
+    issue: 14
+    added: 2026-09-30
