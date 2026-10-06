@@ -756,3 +756,7 @@ requested_stocks:
     name: Karman Holdings Inc.
     issue: 15
     added: 2026-10-06
+  - ticker: EFX
+    name: Equifax Inc.
+    issue: 16
+    added: 2026-10-06
