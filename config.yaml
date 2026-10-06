@@ -760,3 +760,7 @@ requested_stocks:
     name: Equifax Inc.
     issue: 16
     added: 2026-10-06
+  - ticker: TRU
+    name: TransUnion
+    issue: 17
+    added: 2026-10-06
