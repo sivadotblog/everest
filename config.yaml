@@ -764,3 +764,7 @@ requested_stocks:
     name: TransUnion
     issue: 17
     added: 2026-10-06
+  - ticker: CAR
+    name: Avis Budget Group, Inc.
+    issue: 18
+    added: 2026-10-06
