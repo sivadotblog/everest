@@ -768,3 +768,7 @@ requested_stocks:
     name: Avis Budget Group, Inc.
     issue: 18
     added: 2026-10-06
+  - ticker: IWM
+    name: iShares Russell 2000 ETF
+    issue: 19
+    added: 2026-10-07
