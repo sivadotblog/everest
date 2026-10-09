@@ -772,3 +772,7 @@ requested_stocks:
     name: iShares Russell 2000 ETF
     issue: 19
     added: 2026-10-07
+  - ticker: HUM
+    name: Humana Inc.
+    issue: 20
+    added: 2026-10-09
