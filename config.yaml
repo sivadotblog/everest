@@ -780,3 +780,7 @@ requested_stocks:
     name: Snowflake Inc.
     issue: 21
     added: 2026-10-16
+  - ticker: KC
+    name: Kingsoft Cloud Holdings Limited
+    issue: 23
+    added: 2026-10-16
