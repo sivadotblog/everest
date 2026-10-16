@@ -776,3 +776,7 @@ requested_stocks:
     name: Humana Inc.
     issue: 20
     added: 2026-10-09
+  - ticker: SNOW
+    name: Snowflake Inc.
+    issue: 21
+    added: 2026-10-16
