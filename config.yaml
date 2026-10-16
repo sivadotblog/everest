@@ -788,3 +788,7 @@ requested_stocks:
     name: Medifast, Inc.
     issue: 24
     added: 2026-10-16
+  - ticker: AII
+    name: American Integrity Insurance Group, Inc.
+    issue: 25
+    added: 2026-10-16
