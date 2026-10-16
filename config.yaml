@@ -784,3 +784,7 @@ requested_stocks:
     name: Kingsoft Cloud Holdings Limited
     issue: 23
     added: 2026-10-16
+  - ticker: MED
+    name: Medifast, Inc.
+    issue: 24
+    added: 2026-10-16
