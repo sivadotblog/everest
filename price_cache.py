@@ -19,16 +19,47 @@ import pandas as pd
 import yfinance as yf
 
 
+def append_missing_session_close(hist: pd.DataFrame, meta: Optional[dict],
+                                 now: Optional[float] = None) -> pd.DataFrame:
+    """Append the latest session's close when Yahoo's daily bars lag behind it.
+
+    For hours after the bell, Yahoo's daily history still ends at the previous
+    session even though the quote (``history_metadata``) already carries the
+    day's closing price — so the scheduled evening run shipped yesterday's
+    close. Once the regular session is over, add that close as the session's
+    bar. A no-op while the session is open (an intraday price is not a close),
+    when the bar is already present, or when the metadata is incomplete.
+    """
+    meta = meta or {}
+    price = meta.get("regularMarketPrice")
+    market_time = meta.get("regularMarketTime")
+    tz = meta.get("exchangeTimezoneName")
+    session_end = ((meta.get("currentTradingPeriod") or {}).get("regular") or {}).get("end")
+    if hist.empty or None in (price, market_time, tz, session_end):
+        return hist
+    if (time.time() if now is None else now) < session_end:
+        return hist
+    session = pd.Timestamp(market_time, unit="s", tz="UTC").tz_convert(tz).normalize()
+    if session.date() <= hist.index[-1].date():
+        return hist
+    bar = pd.DataFrame({"Close": [float(price)]},
+                       index=pd.DatetimeIndex([session], name=hist.index.name))
+    return pd.concat([hist, bar])
+
+
 def _load_prices(ticker: str, years: int) -> Optional[pd.DataFrame]:
-    end = datetime.utcnow()
-    start = end - timedelta(days=years * 365)
-    hist = yf.Ticker(ticker).history(
+    now = datetime.utcnow()
+    start = now - timedelta(days=years * 365)
+    tk = yf.Ticker(ticker)
+    hist = tk.history(
         start=start.strftime("%Y-%m-%d"),
-        end=end.strftime("%Y-%m-%d"),
+        # `end` is exclusive: pass tomorrow so today's session is in range
+        end=(now + timedelta(days=1)).strftime("%Y-%m-%d"),
         auto_adjust=True,
     )
     if hist.empty:
         return None
+    hist = append_missing_session_close(hist, tk.history_metadata)
     # Yahoo occasionally returns a half-formed latest bar with a NaN close;
     # a NaN would poison every downstream stat and serialize as invalid JSON.
     # Thinly-traded OTC listings (Yahoo's *F-suffixed pink-sheet symbols) can
