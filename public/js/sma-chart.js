@@ -243,6 +243,7 @@
       });
     statsEl.innerHTML = `
       <div class="sma-stat"><span class="lbl">Ticker</span><span class="val">${payload.ticker}</span></div>
+      <div class="sma-stat" title="Closing price on the latest date in the data"><span class="lbl">Last close (${fmtDate(payload.end)})</span><span class="val">$${payload.prices[payload.prices.length - 1].c.toFixed(2)}</span></div>
       <div class="sma-stat"><span class="lbl">Range</span><span class="val">${fmtDate(payload.start)} → ${fmtDate(payload.end)}</span></div>
       <div class="sma-stat"><span class="lbl">Trading days</span><span class="val">${payload.prices.length.toLocaleString()}</span></div>
       <div class="sma-stat"><span class="lbl">+${thresholdPct}% triggers</span><span class="val up">${ups}</span></div>

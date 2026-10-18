@@ -30,6 +30,8 @@ from pathlib import Path
 import yaml
 import yfinance as yf
 
+from price_cache import append_missing_session_close
+
 _ROOT = Path(__file__).parent
 _CONFIG = yaml.safe_load((_ROOT / "config.yaml").read_text())
 _SITE = _CONFIG["site"]
@@ -68,6 +70,7 @@ def fetch_one(ticker: str, start: str, end: str) -> dict:
     hist = hist.dropna(subset=["Close"])
     if hist.empty:
         raise SystemExit(f"No data returned for ticker '{ticker}'. Check the symbol.")
+    hist = append_missing_session_close(hist, tk.history_metadata)
 
     prices = [
         {"d": idx.strftime("%Y-%m-%d"), "c": round(float(row["Close"]), 4)}
@@ -88,9 +91,10 @@ def main() -> int:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     tickers = _tickers_from_screen()
 
-    end_dt = datetime.utcnow()
-    start_dt = end_dt - timedelta(days=LOOKBACK_YEARS * 365)
-    end = end_dt.strftime("%Y-%m-%d")
+    now = datetime.utcnow()
+    start_dt = now - timedelta(days=LOOKBACK_YEARS * 365)
+    # `end` is exclusive: pass tomorrow so today's session is in range
+    end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     start = start_dt.strftime("%Y-%m-%d")
 
     manifest = {
