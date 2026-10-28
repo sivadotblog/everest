@@ -130,7 +130,8 @@ def cmd_analyze(args, cfg) -> int:
             a["parabolic_window_days"], a["parabolic_max_run_up_pct"],
             a["parabolic_recency_days"], a["chained_max_down_streak"],
             a["chained_deep_run_len"], a["chained_deep_run_count"],
-            a["min_events"], min_history_years)
+            a["min_events"], min_history_years,
+            loser_max_up_down_ratio=a["loser_max_up_down_ratio"])
         m_path = OUTPUT_DIR / f"summary_{n:g}pct.csv"
         pd.DataFrame(rows).drop(columns=["recent_events"]).to_csv(m_path, index=False)
         print(f"wrote {m_path} ({len(rows)} tickers)")
@@ -157,9 +158,11 @@ def _leaderboard_payloads(prices: dict[str, pd.DataFrame], names: dict[str, str]
             a["parabolic_window_days"], a["parabolic_max_run_up_pct"],
             a["parabolic_recency_days"], a["chained_max_down_streak"],
             a["chained_deep_run_len"], a["chained_deep_run_count"],
-            a["min_events"], min_history_years)
+            a["min_events"], min_history_years,
+            loser_max_up_down_ratio=a["loser_max_up_down_ratio"])
         out[n] = build_leaderboard(rows, n, years, universe_size=universe_size,
-                                   generated_at=generated_at)
+                                   generated_at=generated_at,
+                                   loser_max_up_down_ratio=a["loser_max_up_down_ratio"])
     return out
 
 
@@ -186,7 +189,8 @@ def cmd_leaderboard(args, cfg) -> int:
            f"{'n▲':>5}{'n▼':>5}"
            f"{'cagr%':>8}{'maxDD%':>8}  trend")
     print("\n" + hdr + "\n" + "-" * len(hdr))
-    for r in default_payload["results"][:25]:
+    # Loser rows are trimmed to their leg counts — nothing to print here.
+    for r in [r for r in default_payload["results"] if not r["loser"]][:25]:
         trend = ("DOWN" if not r["trend_positive"]
                  else "PARA" if r["parabolic"]
                  else "CHAIN" if r["chained_dips"]

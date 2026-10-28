@@ -280,6 +280,21 @@ def test_transition_counts_and_net_rate():
     assert s["thin_history"] is True            # only 5 completed legs
 
 
+def test_avg_days_to_recover_uses_calendar_days():
+    # Thu 100 -> Fri 89.9 (down) -> Wed 100.5 (up, 5 days incl. a weekend)
+    # -> Thu 90 (down) -> Fri 99.5 (up, 1 day). Average of [5, 1] = 3.
+    s = compute_oscillation_summary(
+        make_prices([100, 89.9, 92, 95, 100.5, 90, 99.5]), threshold_pct=10.0)
+    assert [s["n_down"], s["n_up"]] == [2, 2]
+    assert s["avg_days_to_recover"] == 3.0
+
+
+def test_avg_days_to_recover_none_without_resolved_dip():
+    s = compute_oscillation_summary(declining_prices(), threshold_pct=10.0)
+    assert s["n_down"] > 0 and s["dips_resolved"] == 0
+    assert s["avg_days_to_recover"] is None
+
+
 def _cycle_prices(n_round_trips, extra_up_legs, pad_to):
     """n_round_trips (down leg, up leg) pairs, then extra_up_legs pure up
     legs, then flat padding so both fixtures share the same span."""
@@ -525,6 +540,7 @@ def test_leaderboard_payloads_one_per_threshold():
         "chained_deep_run_count": 2,
         "min_events": 10,
         "min_history_fraction": 0.9,
+        "loser_max_up_down_ratio": None,     # gate off: these read full rows
     }
     payloads = _leaderboard_payloads(
         prices, {"OSC": "test"}, as_of, [5.0, 10.0], years=5, a=a,
@@ -566,6 +582,7 @@ def test_leaderboard_payloads_flags_short_history():
         "chained_deep_run_count": 2,
         "min_events": 10,
         "min_history_fraction": 0.9,
+        "loser_max_up_down_ratio": None,     # gate off: these read full rows
     }
     # years=3 -> min_history_years = 2.7: OSC's 2.95y clears it, YOUNG's
     # 0.05y doesn't.
@@ -575,6 +592,48 @@ def test_leaderboard_payloads_flags_short_history():
     by_ticker = {r["ticker"]: r for r in payloads[10.0]["results"]}
     assert by_ticker["OSC"]["short_history"] is False
     assert by_ticker["YOUNG"]["short_history"] is True
+
+
+# ---------------------------------------------------------------------------
+# loser gate (n_up <= ratio * n_down -> Losers page)
+# ---------------------------------------------------------------------------
+
+def _loser_rows(ratio):
+    prices = {
+        "R125": _cycle_prices(8, 2, pad_to=300),    # 10 up / 8 down = 1.25
+        "R145": _cycle_prices(20, 9, pad_to=300),   # 29 up / 20 down = 1.45
+        "R150": _cycle_prices(20, 10, pad_to=300),  # 30 up / 20 down = 1.50
+        "NODN": _cycle_prices(0, 5, pad_to=300),    # 5 up / 0 down
+    }
+    as_of = max(p["date"].iloc[-1] for p in prices.values())
+    return compute_leaderboard_rows(prices, {}, as_of, 10.0, 30,
+                                    loser_max_up_down_ratio=ratio)
+
+
+def test_loser_flag_boundaries():
+    by_ticker = {r["ticker"]: r for r in _loser_rows(1.45)}
+    assert (by_ticker["R145"]["n_up"], by_ticker["R145"]["n_down"]) == (29, 20)
+    assert by_ticker["R125"]["loser"] is True
+    assert by_ticker["R145"]["loser"] is True     # at the cutoff -> loser
+    assert by_ticker["R150"]["loser"] is False
+    assert by_ticker["NODN"]["loser"] is False    # no down legs at all
+
+
+def test_loser_gate_off_by_default():
+    assert not any(r["loser"] for r in _loser_rows(None))
+
+
+def test_build_leaderboard_trims_loser_rows():
+    rows = _loser_rows(1.45)
+    payload = build_leaderboard(rows, 10.0, 5, universe_size=4,
+                                generated_at="2026-10-18T00:00:00",
+                                loser_max_up_down_ratio=1.45)
+    assert payload["loser_max_up_down_ratio"] == 1.45
+    by_ticker = {r["ticker"]: r for r in payload["results"]}
+    assert set(by_ticker["R125"]) == {"rank", "ticker", "name", "n_up", "n_down", "loser"}
+    assert "cagr_pct" in by_ticker["R150"] and by_ticker["R150"]["loser"] is False
+    # ranks are assigned before trimming: losers keep their place
+    assert sorted(r["rank"] for r in payload["results"]) == [1, 2, 3, 4]
 
 
 # ---------------------------------------------------------------------------

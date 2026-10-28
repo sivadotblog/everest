@@ -42,12 +42,15 @@ import pandas as pd
 from reliability import (DEFAULT_CHAINED_DEEP_RUN_COUNT,
                          DEFAULT_CHAINED_DEEP_RUN_LEN,
                          DEFAULT_CHAINED_MAX_DOWN_STREAK,
+                         DEFAULT_LOSER_MAX_UP_DOWN_RATIO,
                          DEFAULT_MIN_EVENTS,
                          DEFAULT_MIN_HISTORY_YEARS,
                          DEFAULT_PARABOLIC_MAX_RUN_UP_PCT,
                          DEFAULT_PARABOLIC_RECENCY_DAYS,
                          DEFAULT_PARABOLIC_WINDOW_DAYS,
                          compute_oscillation_summary)
+
+LOSER_FIELDS = ("rank", "ticker", "name", "n_up", "n_down", "loser")
 
 
 def compute_leaderboard_rows(prices_by_ticker: dict[str, pd.DataFrame],
@@ -61,7 +64,8 @@ def compute_leaderboard_rows(prices_by_ticker: dict[str, pd.DataFrame],
                              chained_deep_run_len: int = DEFAULT_CHAINED_DEEP_RUN_LEN,
                              chained_deep_run_count: int = DEFAULT_CHAINED_DEEP_RUN_COUNT,
                              min_events: int = DEFAULT_MIN_EVENTS,
-                             min_history_years: float | None = DEFAULT_MIN_HISTORY_YEARS) -> list[dict]:
+                             min_history_years: float | None = DEFAULT_MIN_HISTORY_YEARS,
+                             loser_max_up_down_ratio: float | None = DEFAULT_LOSER_MAX_UP_DOWN_RATIO) -> list[dict]:
     """Per-ticker oscillation summaries, sorted for ranking.
 
     Sort order: steady trend-positive tickers by ``net_legs_per_year`` desc,
@@ -70,7 +74,8 @@ def compute_leaderboard_rows(prices_by_ticker: dict[str, pd.DataFrame],
     tier, either flag demotes), then dip-chainers, then parabolic
     trend-positives, then downtrenders; ties break on ticker for
     determinism. Tickers with zero threshold events are dropped (nothing to
-    show).
+    show). ``loser`` (n_up <= loser_max_up_down_ratio * n_down) is a flag
+    only — it does not change the sort order.
     """
     rows = []
     for ticker in sorted(prices_by_ticker):
@@ -92,6 +97,8 @@ def compute_leaderboard_rows(prices_by_ticker: dict[str, pd.DataFrame],
             "ticker": ticker,
             "name": names.get(ticker, ticker),
             **s,
+            "loser": bool(loser_max_up_down_ratio is not None
+                          and s["n_up"] <= loser_max_up_down_ratio * s["n_down"]),
         })
     rows.sort(key=lambda r: (not r["trend_positive"], r["parabolic"],
                              r["chained_dips"],
@@ -103,9 +110,16 @@ def compute_leaderboard_rows(prices_by_ticker: dict[str, pd.DataFrame],
 def build_leaderboard(rows: list[dict],
                       threshold_pct: float, lookback_years: float,
                       universe_size: int,
-                      generated_at: str) -> dict:
-    """Assemble the JSON payload the dashboard consumes."""
+                      generated_at: str,
+                      loser_max_up_down_ratio: float | None = DEFAULT_LOSER_MAX_UP_DOWN_RATIO) -> dict:
+    """Assemble the JSON payload the dashboard consumes.
+
+    Loser rows keep only the fields the Losers page shows — nothing else
+    reads them, and dropping the rest keeps the payload small.
+    """
     results = [{"rank": rank, **r} for rank, r in enumerate(rows, 1)]
+    results = [{k: r[k] for k in LOSER_FIELDS} if r.get("loser") else r
+               for r in results]
     return {
         "generated_at": generated_at,
         "metric": "net_legs_per_year",
@@ -132,6 +146,7 @@ def build_leaderboard(rows: list[dict],
             "the direction of the latest threshold event: down leg = BUY, "
             "up leg = SELL — acting on it is the investor's decision."),
         "threshold_pct": threshold_pct,
+        "loser_max_up_down_ratio": loser_max_up_down_ratio,
         "lookback_years": lookback_years,
         "universe_size": universe_size,
         "results": results,
