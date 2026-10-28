@@ -15,7 +15,7 @@ site:
 # ---------------------------------------------------------------------------
 analyzer:
 
-  thresholds_pct: [5.0, 10.0, 15.0, 20.0]  # ±N% leg sizes precomputed for the leaderboard slider
+  thresholds_pct: [5.0, 7.5, 10.0, 15.0, 20.0]  # ±N% leg sizes precomputed for the leaderboard slider
   default_threshold_pct: 10.0   # slider's initial position; also the bullish_screen.json alias
   lookback_years: 7             # price history window
 
@@ -72,6 +72,12 @@ analyzer:
   # LLY (25/9, ratio 2.78x) edges out SPXL on quality: 3.2 net legs/yr.
   # net_dips_per_year / recovery_rate (dip-transition reliability) remain in
   # the JSON as context, not the rank key.
+  # Loser gate: a ticker with n_up <= loser_max_up_down_ratio * n_down (down
+  # legs outnumber, match, or nearly match up legs) has no clear edge. It is
+  # flagged `loser`, dropped from the leaderboard, listed on the Losers page
+  # with only its leg counts, and skipped by generate_data.py when it is a
+  # loser at every threshold. Per threshold — the set moves with the slider.
+  loser_max_up_down_ratio: 1.45
   
 
   # Leveraged ETFs (TQQQ, SOXL, ...) are part of the universe. The old

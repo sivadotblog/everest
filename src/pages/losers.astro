@@ -1,0 +1,42 @@
+---
+import Base from '../layouts/Base.astro';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<Base title="Losers">
+  <Fragment slot="head">
+    <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_simple.min.css" />
+  </Fragment>
+
+  <h1>Losers</h1>
+  <p>
+    Tickers with no clear up/down edge at the selected threshold: down legs outnumber,
+    match, or nearly match up legs (<strong>n▲ ≤ cutoff × n▼</strong>, cutoff from
+    <code>analyzer.loser_max_up_down_ratio</code>). They are left off the
+    <a href={`${base}/`}>Leaderboard</a> and get only their leg counts here.
+    <strong>Ratio</strong> = n▲ / n▼; lowest first. The list changes with the threshold —
+    a loser at one threshold can be a leaderboard name at another.
+  </p>
+
+  <div class="sma-controls">
+    <div>
+      <label for="lb-threshold">
+        Threshold <span id="lb-threshold-label" class="value-pill">10%</span>
+      </label>
+      <input id="lb-threshold" type="range" min="0" max="3" step="1" value="1" />
+    </div>
+  </div>
+
+  <p id="loser-meta"><em>Loading…</em></p>
+
+  <div id="tb-filters" class="tb-filter-bar">
+    <div class="tb-filter-group">
+      <label for="f-ticker">Ticker / Name</label>
+      <input type="text" id="f-ticker" placeholder="e.g. RKLB or Rocket Lab" autocomplete="off" />
+    </div>
+  </div>
+
+  <div id="loser-table"></div>
+
+  <script is:inline src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+  <script is:inline src={`${base}/js/loser-board.js`}></script>
+</Base>

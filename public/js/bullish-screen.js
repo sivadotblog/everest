@@ -178,6 +178,13 @@
           } },
         { title: "n▲", field: "n_up", sorter: "number", hozAlign: "right", width: 60 },
         { title: "n▼", field: "n_down", sorter: "number", hozAlign: "right", width: 60 },
+        { title: "Days to recover", field: "avg_days_to_recover", sorter: "number",
+          sorterParams: { alignEmptyValues: "bottom" }, hozAlign: "right", width: 150,
+          formatter: (cell) => {
+            const v = cell.getValue();
+            if (v == null) return `<span style="opacity:0.35;">—</span>`;
+            return `<span title="Average calendar days from a −N% leg to the +N% leg right after it" style="cursor:help;">${fmt(v, 0)}</span>`;
+          } },
         { title: "CAGR%", field: "cagr_pct", sorter: "number", hozAlign: "right", width: 85, formatter: num(1) },
         { title: "MaxDD%", field: "max_drawdown_pct", sorter: "number", hozAlign: "right", width: 90, formatter: num(1) },
         { title: "1y run↑%", field: "max_run_up_pct", sorter: "number", hozAlign: "right", width: 95,
@@ -188,7 +195,12 @@
               ? `<span style="color:var(--down,#c2410c);font-weight:700;">${v} 🚀</span>`
               : v;
           } },
-        { title: "Recent Δ", field: "recent_events", hozAlign: "center", width: 150, formatter: recentEventsFmt },
+        { title: "Recent Δ", field: "recent_events", hozAlign: "center", width: 150, formatter: recentEventsFmt,
+          // Events are oldest-first, so the last one is the latest leg; ISO
+          // dates compare as strings. Rows with no recent leg ("") sort last
+          // on the default newest-first click.
+          sorter: (a, b) => ((a || []).at(-1)?.date || "").localeCompare((b || []).at(-1)?.date || ""),
+          headerSortStartingDir: "desc" },
       ],
       rowFormatter: (row) => {
         const d = row.getData();
@@ -257,6 +269,9 @@
     if (cagrMin) filters.push({ field: "cagr_pct", type: ">=", value: Number(cagrMin) });
     const cagrMax = document.getElementById("f-cagr-max")?.value;
     if (cagrMax) filters.push({ field: "cagr_pct", type: "<=", value: Number(cagrMax) });
+    if (document.getElementById("f-recent")?.getAttribute("aria-pressed") === "true") {
+      filters.push({ field: (d) => (d.recent_events || []).length > 0 });
+    }
     tabulatorInstance.setFilter(filters);
   }
 
@@ -267,8 +282,15 @@
       applyFilters();
       saveState();
     }));
+    const recentBtn = document.getElementById("f-recent");
+    recentBtn?.addEventListener("click", () => {
+      recentBtn.setAttribute("aria-pressed", String(recentBtn.getAttribute("aria-pressed") !== "true"));
+      applyFilters();
+      saveState();
+    });
     document.getElementById("f-reset")?.addEventListener("click", () => {
       document.querySelectorAll("#tb-filters input").forEach(inp => inp.value = "");
+      recentBtn?.setAttribute("aria-pressed", "false");
       tabulatorInstance?.clearFilter();
       saveState();
     });
@@ -280,17 +302,20 @@
   // clean, and only Back/Forward/Reload restore where the user left off.
   let restoring = false; // true while init() is replaying a saved state
   let restoreScrollY = 0;
-  const KNOWN_FILTER_IDS = ["f-ticker", "f-rank-max", "f-vstrend-max", "f-cagr-min", "f-cagr-max"];
+  const KNOWN_FILTER_IDS = ["f-ticker", "f-rank-max", "f-vstrend-max", "f-cagr-min", "f-cagr-max", "f-recent"];
 
   function readState() {
     const filters = {};
     document.querySelectorAll("#tb-filters input").forEach((inp) => {
       if (inp.id) filters[inp.id] = inp.value;
     });
+    // A toggle button, not an input: saved as "1" (on) or "" (off).
+    const recentBtn = document.getElementById("f-recent");
+    if (recentBtn) filters["f-recent"] = recentBtn.getAttribute("aria-pressed") === "true" ? "1" : "";
     const thresholdInput = document.getElementById("lb-threshold");
     return {
       v: 1,
-      threshold: thresholdInput ? parseFloat(thresholdInput.value) : defaultThreshold,
+      threshold: thresholdInput ? sliderThreshold(thresholdInput) : defaultThreshold,
       filters,
       sort: tabulatorInstance ? tabulatorInstance.getSorters().map((s) => ({ column: s.field, dir: s.dir })) : [],
       page: tabulatorInstance ? tabulatorInstance.getPage() : 1,
@@ -310,10 +335,8 @@
   function validateState(raw, thresholdInput) {
     if (!raw || raw.v !== 1) return null;
     const state = { filters: {}, sort: [], page: 1, pageSize: 50, scrollY: 0, threshold: null };
-    if (Number.isFinite(raw.threshold) && thresholdInput) {
-      const min = parseFloat(thresholdInput.min);
-      const max = parseFloat(thresholdInput.max);
-      if (raw.threshold >= min && raw.threshold <= max) state.threshold = raw.threshold;
+    if (Number.isFinite(raw.threshold) && thresholdInput && thresholds.includes(raw.threshold)) {
+      state.threshold = raw.threshold;
     }
     if (raw.filters && typeof raw.filters === "object") {
       KNOWN_FILTER_IDS.forEach((id) => {
@@ -334,6 +357,19 @@
   // ---- Bootstrap ----
   let lastResults = [];
   let defaultThreshold = 10;
+  // The slider moves over indexes into this list (thresholds can be unevenly
+  // spaced, e.g. 5 / 7.5 / 10 / 15 / 20); the manifest replaces it on load.
+  let thresholds = [5, 10, 15, 20];
+
+  function sliderThreshold(input) {
+    return thresholds[Number(input.value)] ?? defaultThreshold;
+  }
+
+  function setSlider(input, label, pct) {
+    const i = thresholds.indexOf(pct);
+    input.value = i >= 0 ? i : thresholds.indexOf(defaultThreshold);
+    if (label) label.textContent = `${sliderThreshold(input)}%`;
+  }
   const screenCache = new Map(); // thresholdPct -> payload
 
   async function loadManifest() {
@@ -354,7 +390,10 @@
   }
 
   function renderMeta(metaEl, data) {
-    const results = data.results || [];
+    // Losers live on their own page; count them, describe the rest.
+    const all = data.results || [];
+    const results = all.filter((r) => !r.loser);
+    const nLosers = all.length - results.length;
     const nPos = results.filter((r) => r.trend_positive && !r.parabolic && !r.chained_dips && !r.thin_history && !r.short_history).length;
     const nPara = results.filter((r) => r.trend_positive && r.parabolic).length;
     const nChain = results.filter((r) => r.trend_positive && !r.parabolic && r.chained_dips).length;
@@ -368,6 +407,8 @@
       `${nChain} dip-chainers (⛓️, ranked down), ` +
       `${nPara} parabolic runners (🚀, ranked down), ` +
       `${results.filter((r) => !r.trend_positive).length} downtrenders (greyed). ` +
+      (nLosers ? `${nLosers} losers (n▲ ≤ ${data.loser_max_up_down_ratio}× n▼) moved to the ` +
+        `<a href="${siteBase()}/losers/">Losers</a> page. ` : "") +
       `<small>Generated ${new Date(data.generated_at).toLocaleString()}.</small>`;
   }
 
@@ -379,7 +420,7 @@
 
     try {
       const data = await loadScreen(thresholdPct);
-      lastResults = data.results || [];
+      lastResults = (data.results || []).filter((r) => !r.loser);
       if (metaEl) renderMeta(metaEl, data);
       renderScatter(scatterEl, lastResults);
       buildTable(tableEl, lastResults, opts);
@@ -387,8 +428,7 @@
       if (!isFallback && thresholdPct !== defaultThreshold) {
         const thresholdInput = document.getElementById("lb-threshold");
         const thresholdLabel = document.getElementById("lb-threshold-label");
-        if (thresholdInput) thresholdInput.value = defaultThreshold;
-        if (thresholdLabel) thresholdLabel.textContent = `${defaultThreshold}%`;
+        if (thresholdInput) setSlider(thresholdInput, thresholdLabel, defaultThreshold);
         return loadAndRender(defaultThreshold, true, opts);
       }
       if (metaEl) metaEl.innerHTML =
@@ -416,25 +456,25 @@
         const manifest = await loadManifest();
         if (typeof manifest.default === "number") defaultThreshold = manifest.default;
         if (Array.isArray(manifest.thresholds) && manifest.thresholds.length) {
-          thresholdInput.min = Math.min(...manifest.thresholds);
-          thresholdInput.max = Math.max(...manifest.thresholds);
+          thresholds = [...manifest.thresholds].sort((x, y) => x - y);
         }
       } catch (e) {
-        // Manifest missing: fall back to the slider's markup defaults (5-20, default 10).
+        // Manifest missing: fall back to the built-in list (5-20, default 10).
       }
+      thresholdInput.min = 0;
+      thresholdInput.max = thresholds.length - 1;
+      thresholdInput.step = 1;
     }
 
-    // Validated against the slider's min/max, which the manifest may have
+    // Validated against the threshold list, which the manifest may have
     // just changed above.
     const savedState = validateState(history.state?.lb, thresholdInput);
 
     if (thresholdInput) {
-      const initialThreshold = savedState?.threshold ?? defaultThreshold;
-      thresholdInput.value = initialThreshold;
-      if (thresholdLabel) thresholdLabel.textContent = `${initialThreshold}%`;
+      setSlider(thresholdInput, thresholdLabel, savedState?.threshold ?? defaultThreshold);
 
       thresholdInput.addEventListener("input", () => {
-        const n = parseFloat(thresholdInput.value);
+        const n = sliderThreshold(thresholdInput);
         if (thresholdLabel) thresholdLabel.textContent = `${n}%`;
         // Rows are changing (page resets to 1), but carry sort/page size over
         // from the table that's about to be destroyed.
@@ -452,7 +492,9 @@
       restoreScrollY = savedState.scrollY;
       Object.keys(savedState.filters).forEach((id) => {
         const inp = document.getElementById(id);
-        if (inp) inp.value = savedState.filters[id];
+        if (!inp) return;
+        if (id === "f-recent") inp.setAttribute("aria-pressed", String(savedState.filters[id] === "1"));
+        else inp.value = savedState.filters[id];
       });
       await loadAndRender(savedState.threshold ?? defaultThreshold, false, {
         sort: savedState.sort.length ? savedState.sort : undefined,

@@ -39,6 +39,7 @@ LOOKBACK_YEARS: int = _SITE["lookback_years"]
 TOP_N: int = _SITE["top_n"]
 OUTPUT_DIR = _ROOT / "public" / "data"
 SCREEN_PATH = OUTPUT_DIR / "bullish_screen.json"
+MANIFEST_PATH = OUTPUT_DIR / "screen_manifest.json"
 
 
 def _tickers_from_screen() -> list[str]:
@@ -47,9 +48,30 @@ def _tickers_from_screen() -> list[str]:
             f"'{SCREEN_PATH}' not found — run `main.py leaderboard` first."
         )
     data = json.loads(SCREEN_PATH.read_text())
-    tickers = [r["ticker"] for r in data["results"][:TOP_N]]
+    keep = _non_loser_tickers()
+    if keep is None:
+        results = data["results"]
+    else:
+        results = [r for r in data["results"] if r["ticker"] in keep]
+        print(f"Skipping {len(data['results']) - len(results)} loser(s) "
+              f"(loser at every threshold) — no chart data for them")
+    tickers = [r["ticker"] for r in results[:TOP_N]]
     print(f"Top {TOP_N} tickers from bullish screen: {', '.join(tickers)}")
     return tickers
+
+
+def _non_loser_tickers() -> set[str] | None:
+    """Tickers that are not a loser at one or more thresholds — the leaderboard
+    can link to their chart at some slider position. None when the screen
+    manifest is missing (keep every ticker, as before)."""
+    if not MANIFEST_PATH.exists():
+        return None
+    thresholds = json.loads(MANIFEST_PATH.read_text())["thresholds"]
+    keep: set[str] = set()
+    for n in thresholds:
+        payload = json.loads((OUTPUT_DIR / f"bullish_screen_{n:g}pct.json").read_text())
+        keep.update(r["ticker"] for r in payload["results"] if not r.get("loser"))
+    return keep
 
 
 def fetch_one(ticker: str, start: str, end: str) -> dict:

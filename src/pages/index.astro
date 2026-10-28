@@ -38,7 +38,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       <label for="lb-threshold">
         Threshold <span id="lb-threshold-label" class="value-pill">10%</span>
       </label>
-      <input id="lb-threshold" type="range" min="5" max="20" step="5" value="10" />
+      <input id="lb-threshold" type="range" min="0" max="3" step="1" value="1" />
     </div>
   </div>
 
@@ -75,6 +75,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         <span>–</span>
         <input type="number" id="f-cagr-max" placeholder="max" />
       </div>
+    </div>
+    <div class="tb-filter-group tb-filter-group--btn">
+      <button id="f-recent" type="button" aria-pressed="false"
+              title="Only tickers with a threshold leg in the last 30 days">Recent moves only</button>
     </div>
     <div class="tb-filter-group tb-filter-group--btn">
       <button id="f-reset">Reset</button>
@@ -128,6 +132,14 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
           check n▲ (also see 🌱 thin-history and 🐣 short-history flags).</td>
         </tr>
         <tr>
+          <td><strong>Days to recover</strong></td>
+          <td>Average calendar days from a −N% leg to the +N% leg right after it, at the
+          selected threshold — how long a dip typically keeps capital underwater before
+          the harvest. Only dips that resolved count; a dip followed by another dip is
+          not timed. Context only: the rank counts legs, not their speed. Sort ascending
+          for the fastest recoverers.</td>
+        </tr>
+        <tr>
           <td><strong>CAGR%</strong></td>
           <td>Growth context: annualized return over the lookback. Tickers with negative
           drift (📉, greyed) are not candidates no matter how much they oscillate — they
@@ -178,7 +190,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         </tr>
         <tr>
           <td><strong>Recent Δ</strong></td>
-          <td>Every threshold crossing at the selected ±N% in the last 30 days, oldest to newest — e.g. <code>-1↓ -1↓ +1↑</code> for two down-legs then an up-leg. Based on the actual sequence of events, not calendar days, so it isn't affected by weekends/holidays and naturally shows more badges for an active stock and fewer for a quiet one.</td>
+          <td>Every threshold crossing at the selected ±N% in the last 30 days, oldest to newest — e.g. <code>-1↓ -1↓ +1↑</code> for two down-legs then an up-leg. Based on the actual sequence of events, not calendar days, so it isn't affected by weekends/holidays and naturally shows more badges for an active stock and fewer for a quiet one. Click the header to sort by the latest leg's date (newest first); <strong>Recent moves only</strong> hides rows with no leg in the window (—).</td>
         </tr>
       </tbody>
     </table>

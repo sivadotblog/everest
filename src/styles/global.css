@@ -532,6 +532,7 @@ code {
 }
 
 .tb-filter-bar button:hover { background: var(--bg-hover); color: var(--fg); }
+.tb-filter-bar button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 
 /* ============================================================
    Tabulator overrides — match our design tokens

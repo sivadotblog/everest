@@ -112,6 +112,10 @@ DEFAULT_MIN_EVENTS = 10
 # Short-history gate: None means off (the pure-function default). Production
 # always passes a value — main.py computes lookback_years * min_history_fraction.
 DEFAULT_MIN_HISTORY_YEARS = None
+# Loser gate: None means off (the pure-function default). Production always
+# passes config analyzer.loser_max_up_down_ratio — a ticker with
+# n_up <= ratio * n_down has no clear up/down edge and moves to the Losers page.
+DEFAULT_LOSER_MAX_UP_DOWN_RATIO = None
 
 # Direction labels for action_side: which side the next threshold event
 # would print (BUY = the next event would be a down leg you could buy;
@@ -251,7 +255,9 @@ def compute_oscillation_summary(prices: pd.DataFrame,
     neither alone is enough), ``net_dips_per_year`` / ``recovery_rate``
     (context: dips resolved minus dips deepened per year, and P(recovery |
     dip); ``recovery_rate`` is ``None`` when there were no dips — no
-    evidence is not perfection), ``up_legs_per_year`` (context: completed
+    evidence is not perfection), ``avg_days_to_recover`` (context:
+    average calendar days from a -N% leg to the +N% leg right after it;
+    ``None`` when no dip resolved), ``up_legs_per_year`` (context: completed
     +N% recoveries per year), ``thin_history`` (fewer than ``min_events``
     completed legs — the rates have no denominator to stand on),
     ``span_years`` / ``short_history`` (calendar-span gate: flagged when the
@@ -289,6 +295,7 @@ def compute_oscillation_summary(prices: pd.DataFrame,
         "dips_resolved": 0,
         "dips_deepened": 0,
         "recovery_rate": None,
+        "avg_days_to_recover": None,
         "net_dips_per_year": 0.0,
         "thin_history": True,
         "short_history": False,
@@ -385,6 +392,16 @@ def compute_oscillation_summary(prices: pd.DataFrame,
             out["recovery_rate"] = round(resolved / (resolved + deepened), 3)
         if span_years > _EPS:
             out["net_dips_per_year"] = round((resolved - deepened) / span_years, 2)
+
+        # How long a resolved dip keeps capital underwater: calendar days
+        # from each -N% leg to the +N% leg right after it. Context only — not
+        # part of the rank (net_legs_per_year counts legs, not their speed).
+        dates = ev["date"].tolist()
+        recover_days = [(dates[i + 1] - dates[i]).days
+                        for i in range(len(dirs) - 1)
+                        if dirs[i] == "down" and dirs[i + 1] == "up"]
+        if recover_days:
+            out["avg_days_to_recover"] = round(float(np.mean(recover_days)), 1)
 
         run_lengths, run = [], 0
         for d in dirs:
