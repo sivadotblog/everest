@@ -3,7 +3,8 @@
 Generate per-ticker JSON files consumed by the SMA static site.
 
 Reads the top N tickers from public/data/bullish_screen.json (produced by
-`main.py leaderboard`) and fetches their price history from Yahoo Finance.
+`main.py leaderboard`) and reads their price history from the on-disk price
+cache that step just filled (fetching from Yahoo only on a cache miss).
 
 Run order: main.py leaderboard → generate_data.py
 
@@ -24,13 +25,14 @@ events whenever the user moves the threshold slider, so we only ship raw closes.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
 import yaml
-import yfinance as yf
 
-from price_cache import append_missing_session_close
+from name_cache import load_cached_names
+from price_cache import load_cached_prices
 
 _ROOT = Path(__file__).parent
 _CONFIG = yaml.safe_load((_ROOT / "config.yaml").read_text())
@@ -74,34 +76,22 @@ def _non_loser_tickers() -> set[str] | None:
     return keep
 
 
-def fetch_one(ticker: str, start: str, end: str) -> dict:
-    print(f"  -> Fetching {ticker} ({start} to {end}) ...")
-    tk = yf.Ticker(ticker)
-
-    # Long name (best-effort; some tickers don't expose it)
-    long_name = ticker
-    try:
-        info = tk.info or {}
-        long_name = info.get("longName") or info.get("shortName") or ticker
-    except Exception:  # noqa: BLE001
-        pass
-
-    hist = tk.history(start=start, end=end, auto_adjust=True)
-    # Yahoo occasionally returns a half-formed latest bar with a NaN close —
-    # a literal NaN in the payload is invalid JSON and breaks the chart page.
-    hist = hist.dropna(subset=["Close"])
-    if hist.empty:
-        raise SystemExit(f"No data returned for ticker '{ticker}'. Check the symbol.")
-    hist = append_missing_session_close(hist, tk.history_metadata)
-
+def fetch_one(ticker: str, name: str) -> dict | None:
+    """Build one chart payload from the price cache that `main.py leaderboard`
+    filled minutes earlier, so this step makes no new Yahoo calls in CI.
+    Returns None (and the ticker is skipped) when no price data is available,
+    instead of aborting the whole build over one ticker."""
+    df = load_cached_prices(ticker, years=LOOKBACK_YEARS)
+    if df is None or df.empty:
+        print(f"  !! no price data for {ticker}, skipping its chart")
+        return None
     prices = [
-        {"d": idx.strftime("%Y-%m-%d"), "c": round(float(row["Close"]), 4)}
-        for idx, row in hist.iterrows()
+        {"d": d.strftime("%Y-%m-%d"), "c": round(float(c), 4)}
+        for d, c in zip(pd.to_datetime(df["date"]), df["close"])
     ]
-
     return {
         "ticker": ticker,
-        "name": long_name,
+        "name": name,
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "start": prices[0]["d"],
         "end": prices[-1]["d"],
@@ -113,11 +103,7 @@ def main() -> int:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     tickers = _tickers_from_screen()
 
-    now = datetime.utcnow()
-    start_dt = now - timedelta(days=LOOKBACK_YEARS * 365)
-    # `end` is exclusive: pass tomorrow so today's session is in range
-    end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-    start = start_dt.strftime("%Y-%m-%d")
+    names = load_cached_names(tickers)
 
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -127,7 +113,9 @@ def main() -> int:
 
     print(f"Refreshing {len(tickers)} ticker(s) into {OUTPUT_DIR}")
     for ticker in tickers:
-        payload = fetch_one(ticker, start, end)
+        payload = fetch_one(ticker, names[ticker])
+        if payload is None:
+            continue
         out = OUTPUT_DIR / f"{ticker}.json"
         # allow_nan=False: fail loudly here rather than shipping invalid JSON
         out.write_text(json.dumps(payload, separators=(",", ":"), allow_nan=False))
@@ -140,6 +128,8 @@ def main() -> int:
             "rows": len(payload["prices"]),
         })
 
+    if not manifest["tickers"]:
+        raise SystemExit("No chart data could be built for any ticker.")
     (OUTPUT_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nWrote manifest -> {OUTPUT_DIR / 'manifest.json'}")
     return 0
