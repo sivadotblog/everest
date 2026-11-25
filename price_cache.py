@@ -76,6 +76,8 @@ def _load_prices(ticker: str, years: int) -> Optional[pd.DataFrame]:
 
 CACHE_DIR = Path(__file__).parent / ".cache" / "prices"
 _FETCH_THROTTLE_SEC = 0.4   # be polite to Yahoo on big batches
+_FETCH_ATTEMPTS = 3         # retry transient Yahoo errors (rate limits)
+_RETRY_BACKOFF_SEC = 5.0
 
 
 def _cache_path(ticker: str, years: int) -> Path:
@@ -107,11 +109,15 @@ def load_cached_prices(ticker: str, years: int = 5,
         except Exception:  # noqa: BLE001 -- corrupt cache -> fall through to refetch
             pass
 
-    try:
-        time.sleep(_FETCH_THROTTLE_SEC)
-        df = _load_prices(ticker, years=years)
-    except Exception:  # noqa: BLE001
-        return None
+    df = None
+    for attempt in range(_FETCH_ATTEMPTS):
+        try:
+            time.sleep(_FETCH_THROTTLE_SEC if attempt == 0
+                       else _RETRY_BACKOFF_SEC * attempt)
+            df = _load_prices(ticker, years=years)
+            break
+        except Exception:  # noqa: BLE001 -- e.g. Yahoo rate limit; retry, then give up
+            df = None
     if df is None or df.empty:
         return None
 
